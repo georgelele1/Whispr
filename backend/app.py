@@ -756,9 +756,9 @@ def create_agent() -> Agent:
         mode = str(default_mode or "clean").strip().lower()
         context = str(default_context or "generic").strip().lower()
 
-        if mode not in {"off", "clean", "formal"}:
+        if mode not in ALLOWED_MODES:
             mode = "clean"
-        if context not in {"generic", "email", "chat", "code"}:
+        if context not in ALLOWED_CONTEXTS:
             context = "generic"
 
         profile["preferences"] = {
