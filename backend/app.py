@@ -21,7 +21,8 @@ APP_NAME = "Whispr"
 PROFILE_FILE = "profile.json"
 DICTIONARY_FILE = "dictionary.json"
 HISTORY_FILE = "history.json"
-
+ALLOWED_MODES = {"off", "clean", "formal", "chat", "concise", "meeting", "email", "code"}
+ALLOWED_CONTEXTS = {"generic", "email", "chat", "code"}
 
 def app_support_dir() -> Path:
     home = Path.home()
@@ -70,12 +71,12 @@ def write_json(path: Path, data: Any) -> None:
 
 def default_profile() -> Dict[str, Any]:
     return {
-        "name": "",
-        "email": "",
-        "organization": "",
-        "role": "",
+        "name": "Yanbo",
+        "email": "z5603812@unsw.edu.au",
+        "organization": "UNSW",
+        "role": "Student",
         "preferences": {
-            "default_mode": "clean",
+            "default_mode": "formal",
             "default_context": "generic",
         },
     }
@@ -645,9 +646,9 @@ def transcribe_and_enhance_impl(
     mode = str(mode or "clean").strip().lower()
     context = str(context or "generic").strip().lower()
 
-    if mode not in {"off", "clean", "formal"}:
+    if mode not in ALLOWED_MODES:
         mode = "clean"
-    if context not in {"generic", "email", "chat", "code"}:
+    if context not in ALLOWED_CONTEXTS:
         context = "generic"
 
     audio_path = str(Path(audio_path).expanduser())
