@@ -557,6 +557,8 @@ def ai_backtrace_correct(text: str, context: str = "generic", mode: str = "clean
         return text
 
     dictionary_context = build_dictionary_context()
+    mode_instruction = get_backtrace_instruction(mode)
+    context_instruction = get_context_instruction(context)
 
     agent = Agent(
         model="co/gpt-5",
@@ -570,6 +572,7 @@ def ai_backtrace_correct(text: str, context: str = "generic", mode: str = "clean
             "- Do NOT remove meaning.\n"
             "- Preserve the intended message.\n"
             "- Preserve personal dictionary terms exactly.\n"
+            "- Preserve technical tokens exactly when relevant.\n"
             "- Output ONLY the corrected text.\n"
         )
     )
@@ -578,14 +581,21 @@ def ai_backtrace_correct(text: str, context: str = "generic", mode: str = "clean
 Context: {context}
 Mode: {mode}
 
+Context instruction:
+{context_instruction}
+
+Mode instruction:
+{mode_instruction}
+
 {dictionary_context}
 
 Input transcript:
 {text}
 
 Task:
-Correct backtracking, false starts, repetitions, and self-corrections.
+Correct backtracking, false starts, repetitions, self-corrections, and stutters.
 Keep personal dictionary terms exactly as specified.
+Do not add new information.
 Output only the corrected text.
 """.strip()
 
@@ -598,6 +608,8 @@ def ai_enhance_text(text: str, context: str = "generic", mode: str = "clean") ->
         return text
 
     dictionary_context = build_dictionary_context()
+    mode_instruction = get_mode_instruction(mode)
+    context_instruction = get_context_instruction(context)
 
     agent = Agent(
         model="co/gpt-5",
@@ -605,18 +617,25 @@ def ai_enhance_text(text: str, context: str = "generic", mode: str = "clean") ->
         system_prompt=(
             "You are Whispr's text enhancement agent.\n"
             "Improve punctuation, capitalization, grammar, and readability.\n"
-            "Adapt style based on context.\n"
+            "Adapt style based on context and mode.\n"
             "Rules:\n"
             "- Do NOT add new facts.\n"
             "- Do NOT change meaning.\n"
             "- Preserve personal dictionary terms exactly.\n"
+            "- Preserve technical tokens exactly when relevant.\n"
             "- Output ONLY the final enhanced text.\n"
         )
     )
 
     instruction = f"""
 Context: {context}
-Enhancement level: {mode}
+Mode: {mode}
+
+Context instruction:
+{context_instruction}
+
+Mode instruction:
+{mode_instruction}
 
 {dictionary_context}
 
@@ -624,15 +643,64 @@ Input text:
 {text}
 
 Task:
-Enhance the text for clarity and readability.
+Enhance the text for clarity and readability according to the context and mode.
 Keep dictionary phrases exactly as specified.
+Do not add new facts.
 Output only the final enhanced text.
 """.strip()
 
     result = str(agent.input(instruction)).strip()
     return result.strip().strip('"').strip("'").strip()
 
+# =========================================================
+# Helper
+# =========================================================
+def get_backtrace_instruction(mode: str) -> str:
+    mode = str(mode or "clean").strip().lower()
 
+    instructions = {
+        "off": "Do not modify the transcript.",
+        "clean": (
+            "Remove false starts, repeated fragments, stutters, and obvious spoken disfluencies only. "
+            "Keep the wording close to the original."
+        ),
+        "formal": (
+            "Remove false starts, repeated fragments, and spoken disfluencies. "
+            "Prepare the text for a polished and formal rewrite."
+        ),
+        "chat": (
+            "Remove obvious false starts and repeated fragments, but keep the text natural and conversational."
+        ),
+        "concise": (
+            "Remove false starts, repeated fragments, filler, and verbose spoken phrasing. "
+            "Make the source text tighter before enhancement."
+        ),
+        "meeting": (
+            "Remove spoken disfluencies and make the text easier to convert into structured meeting notes."
+        ),
+        "email": (
+            "Remove spoken disfluencies and shape the text into clean email-ready source content."
+        ),
+        "code": (
+            "Remove spoken disfluencies, but preserve technical terms, commands, code snippets, "
+            "file paths, variable names, and product names exactly."
+        ),
+    }
+
+    return instructions.get(mode, instructions["clean"])
+
+
+def get_context_instruction(context: str) -> str:
+    context = str(context or "generic").strip().lower()
+
+    instructions = {
+        "generic": "Use a neutral style suitable for general everyday text.",
+        "email": "Make the text suitable for email communication.",
+        "chat": "Make the text suitable for instant messaging or casual chat.",
+        "code": "Be careful with technical terms, code syntax, commands, file paths, and variable names.",
+    }
+
+    return instructions.get(context, instructions["generic"])
 # =========================================================
 # Core reusable implementation
 # =========================================================
@@ -650,7 +718,12 @@ def transcribe_and_enhance_impl(
         mode = "clean"
     if context not in ALLOWED_CONTEXTS:
         context = "generic"
-
+    if mode == "email" and context == "generic":
+        context = "email"
+    elif mode == "code" and context == "generic":
+        context = "code"
+    elif mode == "chat" and context == "generic":
+        context = "chat"
     audio_path = str(Path(audio_path).expanduser())
 
     if not Path(audio_path).exists():
@@ -760,7 +833,12 @@ def create_agent() -> Agent:
             mode = "clean"
         if context not in ALLOWED_CONTEXTS:
             context = "generic"
-
+        if mode == "email" and context == "generic":
+            context = "email"
+        elif mode == "code" and context == "generic":
+            context = "code"
+        elif mode == "chat" and context == "generic":
+            context = "chat"
         profile["preferences"] = {
             "default_mode": mode,
             "default_context": context,
@@ -768,7 +846,12 @@ def create_agent() -> Agent:
 
         save_profile(profile)
         return {"ok": True, "profile": profile}
-
+    def get_supported_options() -> Dict[str, Any]:
+        return {
+            "ok": True,
+            "modes": sorted(ALLOWED_MODES),
+            "contexts": sorted(ALLOWED_CONTEXTS),
+        }
     def get_profile() -> Dict[str, Any]:
         return {"ok": True, "profile": load_profile()}
 
@@ -811,6 +894,7 @@ def create_agent() -> Agent:
     register_tool(agent, list_dictionary_words)
     register_tool(agent, scan_dictionary_candidates)
     register_tool(agent, transcribe_and_enhance)
+    register_tool(agent, get_supported_options)
 
     return agent
 

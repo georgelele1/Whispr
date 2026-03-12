@@ -22,8 +22,8 @@ payload = {
     "tool": "transcribe_and_enhance",
     "args": {
         "audio_path": "./Test.wav",  # <-- Changed to a simple, local path
-        "mode": "clean",
-        "context": "generic",
+        "mode": "formal",
+        "context": "chat",
         "prompt": "You are Whispr. Improve the transcript.\n"
                     "Rules:\n"
                     "- Do NOT add new facts.\n"
