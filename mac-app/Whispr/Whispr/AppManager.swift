@@ -94,9 +94,9 @@ final class AppManager: ObservableObject {
             guard let self else { return }
 
             DispatchQueue.main.async {
-                defer {
-                    try? FileManager.default.removeItem(at: audioFileURL)
-                }
+                //defer {
+                //    try? FileManager.default.removeItem(at: audioFileURL)
+               // }
 
                 switch result {
                 case .success(let text):

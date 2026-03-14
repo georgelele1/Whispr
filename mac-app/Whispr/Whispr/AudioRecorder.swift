@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import Combine
+
 final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
     @Published var isRecording = false
 
@@ -12,15 +13,17 @@ final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
         guard !isRecording else { return }
 
         let tempDir = FileManager.default.temporaryDirectory
-        let fileName = "whispr_recording_\(UUID().uuidString).m4a"
+        let fileName = "whispr_recording_\(UUID().uuidString).wav"
         let url = tempDir.appendingPathComponent(fileName)
         tempAudioURL = url
 
         let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatMPEG4AAC,
-            AVSampleRateKey: 44100.0,
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: 16000.0,
             AVNumberOfChannelsKey: 1,
-            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsBigEndianKey: false,
+            AVLinearPCMIsFloatKey: false
         ]
 
         recorder = try AVAudioRecorder(url: url, settings: settings)
@@ -28,7 +31,11 @@ final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
         recorder?.isMeteringEnabled = true
 
         guard recorder?.record(forDuration: maxRecordingDuration) == true else {
-            throw NSError(domain: "AudioRecorder", code: -1, userInfo: [NSLocalizedDescriptionKey: "Could not start recording"])
+            throw NSError(
+                domain: "AudioRecorder",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "Could not start recording"]
+            )
         }
 
         isRecording = true
@@ -37,9 +44,11 @@ final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
 
     func stopRecording() -> URL? {
         guard isRecording else { return nil }
+
         recorder?.stop()
         isRecording = false
         NSLog("Stopped recording")
+
         return tempAudioURL
     }
 

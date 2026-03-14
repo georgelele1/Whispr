@@ -4,9 +4,20 @@ import Combine
 final class LocalBackendClient: ObservableObject {
     @Published var isBackendAvailable = false
 
-    private let backendScriptPath = "/Users/yanbowang/Comp9900_project_testversion/backend/app.py"
-    private let pythonPath = "/Users/yanbowang/opt/anaconda3/bin/python3.11"
+    private let pythonCandidates = [
+        "/Users/yanbowang/opt/anaconda3/bin/python3.11",
+        "/Users/yanbowang/opt/anaconda3/bin/python3",
+        "/opt/homebrew/bin/python3.11",
+        "/opt/homebrew/bin/python3",
+        "/usr/local/bin/python3.11",
+        "/usr/local/bin/python3",
+        "/usr/bin/python3"
+    ]
+
     private let timeout: TimeInterval = 20
+
+    private var pythonPath: String?
+    private var backendScriptPath: String?
 
     init() {
         checkBackendAvailability()
@@ -14,13 +25,44 @@ final class LocalBackendClient: ObservableObject {
 
     private func checkBackendAvailability() {
         let fm = FileManager.default
-        let pythonExists = fm.fileExists(atPath: pythonPath)
-        let scriptExists = fm.fileExists(atPath: backendScriptPath)
 
-        NSLog("python exists: \(pythonExists) -> \(pythonPath)")
-        NSLog("script exists: \(scriptExists) -> \(backendScriptPath)")
+        pythonPath = pythonCandidates.first(where: { fm.fileExists(atPath: $0) })
 
-        isBackendAvailable = pythonExists && scriptExists
+        if let projectRoot = findProjectRoot() {
+            let candidate = projectRoot.appendingPathComponent("backend/app.py").path
+            if fm.fileExists(atPath: candidate) {
+                backendScriptPath = candidate
+            }
+        }
+
+        NSLog("python path = \(pythonPath ?? "nil")")
+        NSLog("backend path = \(backendScriptPath ?? "nil")")
+
+        isBackendAvailable = (pythonPath != nil && backendScriptPath != nil)
+    }
+
+    private func findProjectRoot() -> URL? {
+        let fm = FileManager.default
+
+        // Start from current working directory
+        var current = URL(fileURLWithPath: fm.currentDirectoryPath)
+
+        for _ in 0..<6 {
+            let backendPath = current.appendingPathComponent("backend/app.py").path
+            if fm.fileExists(atPath: backendPath) {
+                return current
+            }
+            current.deleteLastPathComponent()
+        }
+
+        // Fallback: known project root on your machine
+        let fallback = URL(fileURLWithPath: "/Users/yanbowang/Comp9900_project_testversion")
+        let fallbackBackend = fallback.appendingPathComponent("backend/app.py").path
+        if fm.fileExists(atPath: fallbackBackend) {
+            return fallback
+        }
+
+        return nil
     }
 
     func transcribeAudio(
@@ -29,17 +71,23 @@ final class LocalBackendClient: ObservableObject {
         mode: TranscriptionMode,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
-        guard isBackendAvailable else {
-            completion(.failure(NSError(domain: "LocalBackendClient", code: -1, userInfo: [NSLocalizedDescriptionKey: "Python backend script not found"])))
+        guard let pythonPath, let backendScriptPath else {
+            completion(.failure(
+                NSError(
+                    domain: "LocalBackendClient",
+                    code: -1,
+                    userInfo: [NSLocalizedDescriptionKey: "Python or backend script not found"]
+                )
+            ))
             return
         }
 
         DispatchQueue.global(qos: .userInitiated).async {
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: self.pythonPath)
+            process.executableURL = URL(fileURLWithPath: pythonPath)
 
             process.arguments = [
-                self.backendScriptPath,
+                backendScriptPath,
                 "cli",
                 fileURL.path,
                 mode.rawValue,
@@ -51,7 +99,8 @@ final class LocalBackendClient: ObservableObject {
             let errorPipe = Pipe()
             process.standardOutput = outputPipe
             process.standardError = errorPipe
-
+            print("audio path =", fileURL.path)
+            print("file exists before run =", FileManager.default.fileExists(atPath: fileURL.path))
             do {
                 try process.run()
             } catch {
@@ -66,7 +115,13 @@ final class LocalBackendClient: ObservableObject {
 
             if process.isRunning {
                 process.terminate()
-                completion(.failure(NSError(domain: "LocalBackendClient", code: -2, userInfo: [NSLocalizedDescriptionKey: "Transcription timed out"])))
+                completion(.failure(
+                    NSError(
+                        domain: "LocalBackendClient",
+                        code: -2,
+                        userInfo: [NSLocalizedDescriptionKey: "Transcription timed out"]
+                    )
+                ))
                 return
             }
 
@@ -81,7 +136,18 @@ final class LocalBackendClient: ObservableObject {
             }
 
             if process.terminationStatus != 0 {
-                completion(.failure(NSError(domain: "LocalBackendClient", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: errorString.isEmpty ? "Backend exited with code \(process.terminationStatus)" : errorString])))
+                completion(.failure(
+                    NSError(
+                        domain: "LocalBackendClient",
+                        code: Int(process.terminationStatus),
+                        userInfo: [
+                            NSLocalizedDescriptionKey:
+                                errorString.isEmpty
+                                ? "Backend exited with code \(process.terminationStatus)"
+                                : errorString
+                        ]
+                    )
+                ))
                 return
             }
 
@@ -99,7 +165,13 @@ final class LocalBackendClient: ObservableObject {
             if !trimmed.isEmpty {
                 completion(.success(trimmed))
             } else {
-                completion(.failure(NSError(domain: "LocalBackendClient", code: -4, userInfo: [NSLocalizedDescriptionKey: "No output from backend"])))
+                completion(.failure(
+                    NSError(
+                        domain: "LocalBackendClient",
+                        code: -4,
+                        userInfo: [NSLocalizedDescriptionKey: "No output from backend"]
+                    )
+                ))
             }
         }
     }

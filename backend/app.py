@@ -909,6 +909,7 @@ def create_agent() -> Agent:
 # =========================================================
 
 if __name__ == "__main__":
+        
     if len(sys.argv) > 1 and sys.argv[1] == "cli":
         if len(sys.argv) < 3:
             print(json.dumps({
@@ -916,7 +917,8 @@ if __name__ == "__main__":
                 "error": "usage: python app.py cli <audio_path> [mode] [context] [prompt]"
             }, ensure_ascii=False))
             sys.exit(1)
-
+        print("PYTHON RECEIVED PATH:", sys.argv[2] if len(sys.argv) > 2 else "no path")
+        print("PYTHON FILE EXISTS:", os.path.exists(sys.argv[2]) if len(sys.argv) > 2 else False)
         audio_path = sys.argv[2]
         mode = sys.argv[3] if len(sys.argv) > 3 else "clean"
         context = sys.argv[4] if len(sys.argv) > 4 else "generic"
