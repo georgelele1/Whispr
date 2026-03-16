@@ -111,6 +111,7 @@ final class AppManager: ObservableObject {
                 case .success(let text):
                     self.lastOutputText = text
                     self.updateAppStatus(.idle)
+                    FloatingResultWindow.show(text: text)
                     self.pasteTextToActiveApp(text: text)
 
                 case .failure(let error):
@@ -118,8 +119,6 @@ final class AppManager: ObservableObject {
                     self.showErrorAlert(message: "Transcription failed: \(error.localizedDescription)")
                 }
 
-                // Keep temp file for debugging for now.
-                // Uncomment later after everything works.
                 /*
                 try? FileManager.default.removeItem(at: audioFileURL)
                 */
