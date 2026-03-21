@@ -1,49 +1,113 @@
+from __future__ import annotations
+
+import base64
 import json
-import uuid
-import requests
 from pathlib import Path
 
-from connectonion.address import load
-from connectonion.network.connect import RemoteAgent
+from connectonion import Agent
 
-HTTP_BASE = "http://127.0.0.1:8000"
 
-# Resolve paths safely
-co_path = Path(".co")
-audio_path = str(Path("test.wav").resolve())
+AUDIO_FILE = Path("Test.wav")  # change this to your real audio file
 
-# Load signing key + address
-addr = load(co_path)
-keys = {
-    "address": addr["address"],
-    "signing_key": addr["signing_key"],
-}
 
-# Build signed remote call
-ra = RemoteAgent(HTTP_BASE, keys=keys)
+def try_agent_with_file_path(agent: Agent, audio_path: Path) -> None:
+    print("\n=== TEST 1: pass file path as plain text ===")
+    prompt = f"""
+You are testing whether you can accept an audio file path.
 
-payload = {
-    "tool": "transcribe_and_enhance",
-    "args": {
-        "audio_path": "./Test.wav",  # <-- Changed to a simple, local path
-        "mode": "clean",
-        "context": "generic",
-        "prompt": "You are Whispr. Improve the transcript.\n"
-                    "Rules:\n"
-                    "- Do NOT add new facts.\n"
-                    "- Do NOT change meaning.\n"
-                    "- Fix punctuation, capitalization, and grammar.\n"
-                    "- Remove filler words (um/uh/like/you know), stutters, and repeated fragments.\n"
-                    "- Resolve false starts and self-corrections (keep only the corrected version).\n"
-                    "- Output ONLY the final improved text. No quotes. No commentary."
+Audio file path:
+{audio_path.resolve()}
+
+Task:
+1. Tell me whether you can directly read/transcribe this audio file by yourself.
+2. If yes, transcribe it.
+3. If no, clearly say you cannot access local files directly.
+
+Return plain text only.
+""".strip()
+
+    try:
+        result = agent.input(prompt)
+        print("RESULT:")
+        print(str(result))
+    except Exception as e:
+        print("ERROR:", repr(e))
+
+
+def try_agent_with_base64(agent: Agent, audio_path: Path) -> None:
+    print("\n=== TEST 2: pass audio bytes as base64 in prompt ===")
+    try:
+        audio_bytes = audio_path.read_bytes()
+        audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+    except Exception as e:
+        print("ERROR reading file:", repr(e))
+        return
+
+    prompt = f"""
+You are testing whether you can process audio content passed in text form.
+
+The following is a base64-encoded WAV audio file:
+{audio_b64[:12000]}
+
+Task:
+1. Tell me whether you are able to decode and transcribe this audio from base64 content.
+2. If yes, transcribe it.
+3. If no, clearly say you cannot process it this way.
+
+Return plain text only.
+""".strip()
+
+    try:
+        result = agent.input(prompt)
+        print("RESULT:")
+        print(str(result))
+    except Exception as e:
+        print("ERROR:", repr(e))
+
+
+def try_agent_with_structured_payload(agent: Agent, audio_path: Path) -> None:
+    print("\n=== TEST 3: pass structured payload ===")
+    payload = {
+        "task": "transcribe_audio",
+        "file": {
+            "path": str(audio_path.resolve()),
+            "name": audio_path.name,
+            "suffix": audio_path.suffix,
+            "exists": audio_path.exists(),
+        },
+        "instruction": (
+            "Check whether you can directly access this local audio file. "
+            "If yes, transcribe it. If not, say clearly that local file access is unavailable."
+        ),
     }
-}
 
-unique_id = f"local-test-{uuid.uuid4()}"
+    try:
+        result = agent.input(json.dumps(payload, ensure_ascii=False, indent=2))
+        print("RESULT:")
+        print(str(result))
+    except Exception as e:
+        print("ERROR:", repr(e))
 
-msg = ra._build_input_message(json.dumps(payload), input_id=unique_id)
 
-resp = requests.post(f"{HTTP_BASE}/input", json=msg, timeout=300)
+def main() -> None:
+    if not AUDIO_FILE.exists():
+        print(f"Audio file not found: {AUDIO_FILE.resolve()}")
+        return
 
-print("STATUS:", resp.status_code)
-print("BODY:", resp.text)
+    agent = Agent(
+        model="gpt-5",
+        name="audio_input_probe",
+        system_prompt=(
+            "You are a capability test agent. "
+            "Be honest about whether you can directly access or transcribe provided audio files."
+        ),
+    )
+
+    print("Using audio file:", AUDIO_FILE.resolve())
+    try_agent_with_file_path(agent, AUDIO_FILE)
+    try_agent_with_base64(agent, AUDIO_FILE)
+    try_agent_with_structured_payload(agent, AUDIO_FILE)
+
+
+if __name__ == "__main__":
+    main()
