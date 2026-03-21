@@ -5,7 +5,6 @@ import os
 import re
 import sys
 import time
-from collections import Counter
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
@@ -22,33 +21,6 @@ HISTORY_FILE = "history.json"
 
 ALLOWED_MODES = {"off", "clean", "formal", "chat", "concise", "meeting", "email", "code"}
 ALLOWED_CONTEXTS = {"generic", "email", "chat", "code"}
-
-# Run dictionary auto-update only once every N transcriptions
-DICTIONARY_UPDATE_EVERY = 10
-
-# =========================================================
-# Stopwords: NLTK first, fallback second
-# =========================================================
-
-FALLBACK_STOPWORDS = {
-    "the", "and", "for", "are", "this", "that", "with", "have", "from",
-    "you", "your", "was", "were", "will", "can", "not", "but", "they",
-    "about", "just", "into", "then", "than", "when", "what", "where",
-    "how", "why", "our", "their", "his", "her", "she", "him", "them",
-    "hello", "okay", "yeah", "like", "um", "uh", "so", "well", "i",
-    "we", "he", "it", "is", "am", "be", "to", "of", "in", "on", "at",
-    "a", "an", "or", "if", "as", "by", "do", "did", "does", "done",
-    "me", "my", "mine", "ours", "yours", "theirs", "please", "thanks",
-    "thank", "today", "tomorrow", "yesterday", "also", "really", "very"
-}
-
-try:
-    from nltk.corpus import stopwords
-    STOPWORDS = set(stopwords.words("english"))
-except Exception:
-    STOPWORDS = set(FALLBACK_STOPWORDS)
-
-STOPWORDS.update({"um", "uh", "yeah", "okay", "hello", "please", "thanks", "thank"})
 
 # =========================================================
 # Paths / storage
@@ -131,10 +103,6 @@ def load_dictionary() -> Dict[str, Any]:
     return load_store(DICTIONARY_FILE, default_dictionary())
 
 
-def save_dictionary(data: Dict[str, Any]) -> None:
-    save_store(DICTIONARY_FILE, data)
-
-
 def load_history() -> Dict[str, Any]:
     return load_store(HISTORY_FILE, default_history())
 
@@ -193,6 +161,30 @@ def register_tool(agent: Agent, fn: Callable[..., Any]) -> None:
     raise RuntimeError("Cannot register tool: unknown connectonion tool API in this install.")
 
 # =========================================================
+# Dictionary corrections
+# =========================================================
+
+def apply_dictionary_corrections(text: str) -> str:
+    if not text.strip():
+        return text
+
+    result = text
+    for item in load_dictionary().get("terms", []):
+        if not item.get("approved", True):
+            continue
+
+        phrase = str(item.get("phrase", "")).strip()
+        if not phrase:
+            continue
+
+        for alias in item.get("aliases", []):
+            alias = str(alias).strip()
+            if alias:
+                result = re.sub(rf"\b{re.escape(alias)}\b", phrase, result, flags=re.IGNORECASE)
+
+    return result
+
+# =========================================================
 # Instructions
 # =========================================================
 
@@ -245,334 +237,12 @@ def get_context_instruction(context: str) -> str:
     return instructions.get(context, instructions["generic"])
 
 # =========================================================
-# Dictionary utilities
-# =========================================================
-
-def add_or_update_dictionary_entry(
-    phrase: str,
-    aliases: List[str] | None = None,
-    entry_type: str = "custom",
-    source: str = "user",
-    confidence: float = 1.0,
-    approved: bool = True,
-) -> Dict[str, Any]:
-    phrase = str(phrase or "").strip()
-    if not phrase:
-        return {"ok": False, "error": "phrase is required"}
-
-    clean_aliases = sorted({
-        str(a).strip()
-        for a in (aliases or [])
-        if str(a).strip() and str(a).strip().lower() != phrase.lower()
-    })
-
-    data = load_dictionary()
-    terms = data.get("terms", [])
-
-    for item in terms:
-        if str(item.get("phrase", "")).lower() == phrase.lower():
-            merged = set(str(x).strip() for x in item.get("aliases", []) if str(x).strip())
-            merged.update(clean_aliases)
-            item["aliases"] = sorted(merged)
-            item["type"] = entry_type or item.get("type", "custom")
-            item["source"] = source or item.get("source", "user")
-            item["confidence"] = max(float(item.get("confidence", 0.0)), float(confidence))
-            item["approved"] = bool(approved)
-            save_dictionary(data)
-            return {"ok": True, "updated": True, "entry": item}
-
-    entry = {
-        "phrase": phrase,
-        "aliases": clean_aliases,
-        "type": entry_type or "custom",
-        "source": source or "user",
-        "confidence": float(confidence),
-        "approved": bool(approved),
-    }
-    terms.append(entry)
-    data["terms"] = terms
-    save_dictionary(data)
-    return {"ok": True, "updated": False, "entry": entry}
-
-
-def apply_dictionary_corrections(text: str) -> str:
-    if not text.strip():
-        return text
-
-    result = text
-    for item in load_dictionary().get("terms", []):
-        if not item.get("approved", True):
-            continue
-
-        phrase = str(item.get("phrase", "")).strip()
-        if not phrase:
-            continue
-
-        for alias in item.get("aliases", []):
-            alias = str(alias).strip()
-            if alias:
-                result = re.sub(rf"\b{re.escape(alias)}\b", phrase, result, flags=re.IGNORECASE)
-
-    return result
-
-
-def build_dictionary_prompt(user_prompt: str = "", max_terms: int = 50) -> str:
-    profile = load_profile()
-    dictionary = load_dictionary()
-
-    hints: List[str] = []
-    for key in ("name", "organization", "role"):
-        value = str(profile.get(key, "")).strip()
-        if value:
-            hints.append(value)
-
-    for item in dictionary.get("terms", []):
-        if item.get("approved", True):
-            phrase = str(item.get("phrase", "")).strip()
-            if phrase:
-                hints.append(phrase)
-
-    deduped = list(dict.fromkeys(hints))[:max_terms]
-
-    parts: List[str] = []
-    if deduped:
-        parts.append("Please pay attention to these names and domain-specific terms:")
-        parts.append(", ".join(deduped))
-    if str(user_prompt).strip():
-        parts.append(str(user_prompt).strip())
-
-    return "\n".join(parts).strip()
-
-
-def build_dictionary_context(max_terms: int = 50) -> str:
-    lines: List[str] = []
-    for item in load_dictionary().get("terms", [])[:max_terms]:
-        if not item.get("approved", True):
-            continue
-
-        phrase = str(item.get("phrase", "")).strip()
-        aliases = [str(a).strip() for a in item.get("aliases", []) if str(a).strip()]
-        entry_type = str(item.get("type", "custom")).strip()
-
-        if not phrase:
-            continue
-
-        suffix = f" (type: {entry_type}" + (f"; aliases: {', '.join(aliases)}" if aliases else "") + ")"
-        lines.append(f"- {phrase}{suffix}")
-
-    return "Personal dictionary: none" if not lines else "Personal dictionary:\n" + "\n".join(lines)
-
-# =========================================================
-# Candidate extraction
-# =========================================================
-
-def get_recent_texts(limit: int = 10) -> List[str]:
-    return [
-        str(item.get("final_text", "")).strip()
-        for item in load_history().get("items", [])[-limit:]
-        if str(item.get("final_text", "")).strip()
-    ]
-
-
-def get_candidate_source_texts(current_raw_text: str, limit: int = 10) -> List[str]:
-    texts = get_recent_texts(limit=max(0, limit - 1))
-    current_raw_text = str(current_raw_text or "").strip()
-    if current_raw_text:
-        texts.append(current_raw_text)
-    return texts[-limit:]
-
-
-def tokenize_candidate_words(text: str) -> List[str]:
-    return re.findall(r"[A-Za-z][A-Za-z0-9\-_]{2,}", text)
-
-
-def looks_like_domain_term(word: str) -> bool:
-    return (
-        any(c.isdigit() for c in word)
-        or "-" in word
-        or "_" in word
-        or word[:1].isupper()
-        or sum(1 for c in word if c.isupper()) >= 2
-    )
-
-
-def collect_candidate_terms_from_recent_texts(texts: List[str], min_count: int = 2) -> List[Dict[str, Any]]:
-    dictionary = load_dictionary()
-
-    existing_phrases = {str(item.get("phrase", "")).lower() for item in dictionary.get("terms", [])}
-    existing_aliases = {
-        str(alias).lower()
-        for item in dictionary.get("terms", [])
-        for alias in item.get("aliases", [])
-    }
-
-    counter = Counter()
-    original_forms: Dict[str, str] = {}
-    support_score: Dict[str, int] = {}
-
-    for text in texts:
-        seen = set()
-        for word in tokenize_candidate_words(text):
-            lw = word.lower()
-            if (
-                lw in STOPWORDS
-                or lw in existing_phrases
-                or lw in existing_aliases
-                or len(word) < 3
-                or word.isdigit()
-            ):
-                continue
-
-            counter[lw] += 1
-            original_forms.setdefault(lw, word)
-
-            if lw not in seen:
-                support_score[lw] = support_score.get(lw, 0) + 1
-                seen.add(lw)
-
-    candidates = []
-    for lw, count in counter.items():
-        if count >= min_count:
-            phrase = original_forms[lw]
-            candidates.append({
-                "phrase": phrase,
-                "count": count,
-                "support_texts": support_score.get(lw, 1),
-                "domain_like": looks_like_domain_term(phrase),
-            })
-
-    candidates.sort(key=lambda x: (not x["domain_like"], -x["support_texts"], -x["count"], x["phrase"].lower()))
-    return candidates
-
-
-def extract_dictionary_candidates_with_agent(
-    texts: List[str],
-    pre_candidates: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    if not texts:
-        return []
-
-    dictionary_agent = Agent(
-        model="gpt-5",
-        name="whispr_dictionary_builder",
-        system_prompt=(
-            "You extract personal dictionary candidates from recent transcripts.\n"
-            "Return ONLY valid JSON in this format:\n"
-            "{\"terms\": [{\"phrase\": \"...\", \"aliases\": [\"...\"], \"type\": \"technical\", \"confidence\": 0.9}]}\n"
-            "Rules:\n"
-            "- Do not invent facts.\n"
-            "- Use only evidence from the transcript texts.\n"
-            "- Prefer terms supported by repeated usage across recent texts.\n"
-            "- Avoid common English words.\n"
-            "- Prefer names, products, project names, organizations, and technical terms.\n"
-            "- Output valid JSON only."
-        )
-    )
-
-    prompt = f"""
-Recent transcript texts:
-{chr(10).join(texts[-10:])}
-
-Pre-filtered repeated candidate words:
-{", ".join(item["phrase"] for item in pre_candidates[:50])}
-
-Extract only useful personal dictionary terms.
-""".strip()
-
-    try:
-        data = json.loads(str(dictionary_agent.input(prompt)).strip())
-        terms = data.get("terms", [])
-        return terms if isinstance(terms, list) else []
-    except Exception:
-        return []
-
-
-def normalize_candidate_term(item: Dict[str, Any]) -> Dict[str, Any] | None:
-    phrase = str(item.get("phrase", "")).strip()
-    confidence = float(item.get("confidence", 0.0))
-    if not phrase or len(phrase) < 3 or confidence < 0.75 or phrase.lower() in STOPWORDS:
-        return None
-
-    aliases = sorted({
-        str(a).strip()
-        for a in (item.get("aliases", []) if isinstance(item.get("aliases", []), list) else [])
-        if str(a).strip() and str(a).strip().lower() != phrase.lower()
-    })
-
-    return {
-        "phrase": phrase,
-        "aliases": aliases,
-        "type": str(item.get("type", "custom")).strip().lower() or "custom",
-        "source": "agent",
-        "confidence": confidence,
-        "approved": True,
-    }
-
-
-def merge_agent_terms_into_dictionary(candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
-    data = load_dictionary()
-    terms = data.get("terms", [])
-    existing = {str(t.get("phrase", "")).lower(): t for t in terms}
-
-    added: List[str] = []
-    updated: List[str] = []
-
-    for raw in candidates:
-        item = normalize_candidate_term(raw)
-        if not item:
-            continue
-
-        key = item["phrase"].lower()
-        if key in existing:
-            old = existing[key]
-            merged_aliases = set(str(x).strip() for x in old.get("aliases", []) if str(x).strip())
-            merged_aliases.update(item.get("aliases", []))
-            old["aliases"] = sorted(merged_aliases)
-            old["confidence"] = max(float(old.get("confidence", 0.0)), float(item["confidence"]))
-            if old.get("type") in {"", "custom"} and item.get("type"):
-                old["type"] = item["type"]
-            old["approved"] = True
-            updated.append(old["phrase"])
-        else:
-            terms.append(item)
-            existing[key] = item
-            added.append(item["phrase"])
-
-    data["terms"] = terms
-    save_dictionary(data)
-
-    return {
-        "ok": True,
-        "added": added,
-        "updated": updated,
-        "total_terms": len(terms),
-    }
-
-
-def auto_update_dictionary_from_recent_texts(current_raw_text: str) -> Dict[str, Any]:
-    texts = get_candidate_source_texts(current_raw_text=current_raw_text, limit=10)
-    pre_candidates = collect_candidate_terms_from_recent_texts(texts=texts, min_count=2)
-    agent_candidates = extract_dictionary_candidates_with_agent(texts=texts, pre_candidates=pre_candidates)
-    merged = merge_agent_terms_into_dictionary(agent_candidates)
-
-    return {
-        "ok": True,
-        "source_text_count": len(texts),
-        "pre_candidates": pre_candidates[:20],
-        "dictionary_update": merged,
-    }
-
-# =========================================================
-# Merged AI refine stage
+# AI refine
 # =========================================================
 
 def ai_refine_text(text: str, context: str = "generic", mode: str = "clean") -> str:
     if not text.strip():
         return text
-
-    dictionary_context = build_dictionary_context()
-    refine_instruction = get_refine_instruction(mode)
-    context_instruction = get_context_instruction(context)
 
     agent = Agent(
         model="gpt-5",
@@ -585,8 +255,6 @@ def ai_refine_text(text: str, context: str = "generic", mode: str = "clean") -> 
             "Rules:\n"
             "- Do NOT add new facts.\n"
             "- Do NOT change meaning.\n"
-            "- Preserve personal dictionary terms exactly.\n"
-            "- Preserve technical tokens exactly when relevant.\n"
             "- For code mode, preserve commands, code snippets, file paths, variable names, versions, and product names exactly.\n"
             "- Output ONLY the final refined text.\n"
         )
@@ -597,12 +265,10 @@ Context: {context}
 Mode: {mode}
 
 Context instruction:
-{context_instruction}
+{get_context_instruction(context)}
 
 Refinement instruction:
-{refine_instruction}
-
-{dictionary_context}
+{get_refine_instruction(mode)}
 
 Input text:
 {text}
@@ -610,13 +276,11 @@ Input text:
 Task:
 First remove backtracking, false starts, repeated fragments, self-corrections, stutters, and spoken disfluencies where appropriate.
 Then refine the text according to the requested mode and context.
-Keep dictionary phrases exactly as specified.
 Do not add new facts.
 Output only the final refined text.
 """.strip()
 
-    result = str(agent.input(instruction)).strip()
-    return clean_agent_output(result)
+    return clean_agent_output(agent.input(instruction))
 
 # =========================================================
 # Core
@@ -638,45 +302,24 @@ def transcribe_and_enhance_impl(
             "ts": now_ms(),
         }
 
-    stt_prompt = build_dictionary_prompt(prompt)
-    raw = transcribe(audio_path, prompt=stt_prompt) if stt_prompt else transcribe(audio_path)
+    raw = transcribe(audio_path, prompt=prompt) if prompt else transcribe(audio_path)
     raw_text = str(raw).strip()
 
-    transcript_count = len(load_history().get("items", [])) + 1
-    if transcript_count % DICTIONARY_UPDATE_EVERY == 0:
-        dict_update_result = auto_update_dictionary_from_recent_texts(raw_text)
-    else:
-        dict_update_result = {
-            "ok": True,
-            "skipped": True,
-            "reason": f"dictionary auto-update runs every {DICTIONARY_UPDATE_EVERY} transcripts",
-            "current_transcript_index": transcript_count,
-            "next_run_in": DICTIONARY_UPDATE_EVERY - (transcript_count % DICTIONARY_UPDATE_EVERY),
-        }
-
-    normalized_text = apply_dictionary_corrections(raw_text)
-
     if mode == "off":
-        refined_text = normalized_text
+        final_text = apply_dictionary_corrections(raw_text)
     else:
         try:
-            refined_text = ai_refine_text(
-                text=normalized_text,
-                context=context,
-                mode=mode,
+            final_text = apply_dictionary_corrections(
+                ai_refine_text(text=raw_text, context=context, mode=mode)
             )
         except Exception:
-            refined_text = normalized_text
-
-        refined_text = apply_dictionary_corrections(refined_text)
+            final_text = apply_dictionary_corrections(raw_text)
 
     append_history({
         "ts": now_ms(),
         "audio_path": audio_path,
         "raw_text": raw_text,
-        "normalized_text": normalized_text,
-        "refined_text": refined_text,
-        "final_text": refined_text,
+        "final_text": final_text,
         "context": context,
         "mode": mode,
     })
@@ -684,10 +327,7 @@ def transcribe_and_enhance_impl(
     return {
         "ok": True,
         "raw_text": raw_text,
-        "normalized_text": normalized_text,
-        "refined_text": refined_text,
-        "final_text": refined_text,
-        "dictionary_update": dict_update_result,
+        "final_text": final_text,
         "ts": now_ms(),
     }
 
@@ -736,29 +376,6 @@ def get_supported_options() -> Dict[str, Any]:
     }
 
 
-def add_dictionary_word(
-    phrase: str,
-    aliases: List[str] | None = None,
-    entry_type: str = "custom",
-) -> Dict[str, Any]:
-    return add_or_update_dictionary_entry(
-        phrase=phrase,
-        aliases=aliases,
-        entry_type=entry_type,
-        source="user",
-        confidence=1.0,
-        approved=True,
-    )
-
-
-def list_dictionary_words() -> Dict[str, Any]:
-    return {"ok": True, "dictionary": load_dictionary()}
-
-
-def scan_dictionary_candidates(current_text: str = "") -> Dict[str, Any]:
-    return auto_update_dictionary_from_recent_texts(current_text)
-
-
 def transcribe_and_enhance(
     audio_path: str,
     mode: str = "clean",
@@ -781,17 +398,13 @@ def create_agent() -> Agent:
         model="gpt-5",
         name="whispr_orchestrator",
         system_prompt=(
-            "You are Whispr. You orchestrate audio transcription, adaptive personal dictionary "
-            "updates, and text refinement."
+            "You are Whispr. You orchestrate audio transcription and text refinement."
         ),
     )
 
     for fn in (
         create_or_update_profile,
         get_profile,
-        add_dictionary_word,
-        list_dictionary_words,
-        scan_dictionary_candidates,
         transcribe_and_enhance,
         get_supported_options,
     ):
