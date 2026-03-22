@@ -56,13 +56,33 @@ final class AppManager: ObservableObject {
             guard let self else { return }
             DispatchQueue.main.async {
                 switch result {
-                case .success(let message):
+                case .success(let update):
                     self.updateAppStatus(.idle)
                     let alert = NSAlert()
                     alert.messageText = "Dictionary Updated"
-                    alert.informativeText = message
+
+                    var lines: [String] = []
+                    lines.append("Total terms: \(update.totalTerms)")
+
+                    if !update.added.isEmpty {
+                        lines.append("\nNewly added (\(update.added.count)):")
+                        for term in update.added {
+                            var line = "  • \(term.phrase) [\(term.type)]"
+                            if !term.aliases.isEmpty {
+                                line += " — aliases: \(term.aliases.joined(separator: ", "))"
+                            }
+                            lines.append(line)
+                        }
+                    }
+
+                    if update.added.isEmpty {
+                        lines.append("\nNo new terms were added this run.")
+                    }
+
+                    alert.informativeText = lines.joined(separator: "\n")
                     alert.addButton(withTitle: "OK")
                     alert.runModal()
+
                 case .failure(let error):
                     self.updateAppStatus(.error)
                     self.showErrorAlert(message: "Dictionary update failed: \(error.localizedDescription)")

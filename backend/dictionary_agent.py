@@ -227,10 +227,41 @@ if __name__ == "__main__":
 
         try:
             if command == "update":
-                # Run a full dictionary update from recent transcripts
+                # Snapshot before
+                before_phrases = {
+                    str(t.get("phrase", "")).lower()
+                    for t in load_dictionary().get("terms", [])
+                }
+
+                # Run the agent
                 agent = create_agent()
-                result = agent.input("Update the dictionary from recent transcripts.")
-                print(json.dumps({"output": str(result)}, ensure_ascii=False))
+                agent.input("Update the dictionary from recent transcripts.")
+
+                # Diff after
+                after_terms = load_dictionary().get("terms", [])
+                added = []
+                updated = []
+                for term in after_terms:
+                    phrase = str(term.get("phrase", "")).strip()
+                    if not phrase:
+                        continue
+                    entry = {
+                        "phrase": phrase,
+                        "type": term.get("type", "custom"),
+                        "aliases": term.get("aliases", []),
+                        "confidence": term.get("confidence", 1.0),
+                    }
+                    if phrase.lower() not in before_phrases:
+                        added.append(entry)
+                    else:
+                        updated.append(entry)
+
+                print(json.dumps({
+                    "ok": True,
+                    "added": added,
+                    "updated": updated,
+                    "total_terms": len(after_terms),
+                }, ensure_ascii=False))
 
             elif command == "list":
                 result = get_dictionary()

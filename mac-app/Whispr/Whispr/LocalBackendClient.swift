@@ -1,6 +1,27 @@
 import Foundation
 import Combine
 
+struct DictionaryTerm {
+    let phrase: String
+    let type: String
+    let aliases: [String]
+    let confidence: Double
+
+    init?(dict: [String: Any]) {
+        guard let phrase = dict["phrase"] as? String else { return nil }
+        self.phrase = phrase
+        self.type = dict["type"] as? String ?? "custom"
+        self.aliases = dict["aliases"] as? [String] ?? []
+        self.confidence = dict["confidence"] as? Double ?? 1.0
+    }
+}
+
+struct DictionaryUpdateResult {
+    let added: [DictionaryTerm]
+    let updated: [DictionaryTerm]
+    let totalTerms: Int
+}
+
 final class LocalBackendClient: ObservableObject {
     @Published var isBackendAvailable = false
 
@@ -62,7 +83,7 @@ final class LocalBackendClient: ObservableObject {
         return nil
     }
 
-    func runDictionaryUpdate(completion: @escaping (Result<String, Error>) -> Void) {
+    func runDictionaryUpdate(completion: @escaping (Result<DictionaryUpdateResult, Error>) -> Void) {
         guard let pythonPath, let backendScriptPath else {
             completion(.failure(NSError(
                 domain: "LocalBackendClient", code: -1,
@@ -114,14 +135,30 @@ final class LocalBackendClient: ObservableObject {
             print("Dictionary STDERR:", errorString)
 
             DispatchQueue.main.async {
-                if process.terminationStatus == 0 {
-                    completion(.success(outputString.trimmingCharacters(in: .whitespacesAndNewlines)))
-                } else {
+                guard process.terminationStatus == 0 else {
                     completion(.failure(NSError(
                         domain: "LocalBackendClient", code: Int(process.terminationStatus),
                         userInfo: [NSLocalizedDescriptionKey: errorString.isEmpty ? "Dictionary update failed" : errorString]
                     )))
+                    return
                 }
+
+                let trimmed = outputString.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let jsonLine = trimmed
+                    .components(separatedBy: .newlines)
+                    .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+                    .last(where: { $0.hasPrefix("{") && $0.hasSuffix("}") }),
+                      let data = jsonLine.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                else {
+                    completion(.success(DictionaryUpdateResult(added: [], updated: [], totalTerms: 0)))
+                    return
+                }
+
+                let added = (json["added"] as? [[String: Any]] ?? []).compactMap { DictionaryTerm(dict: $0) }
+                let updated = (json["updated"] as? [[String: Any]] ?? []).compactMap { DictionaryTerm(dict: $0) }
+                let total = json["total_terms"] as? Int ?? 0
+                completion(.success(DictionaryUpdateResult(added: added, updated: updated, totalTerms: total)))
             }
         }
     }
