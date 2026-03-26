@@ -23,3 +23,6 @@ DerivedData/
 build/
 xcuserdata/
 *.xcuserstate
+
+#json
+*.json
