@@ -201,6 +201,9 @@ Output only the final refined text.
 # =========================================================
 # Core
 # =========================================================
+def transcribe_audio(file_path: str) -> str:
+    """Transcribe an audio file to text."""
+    return str(transcribe(file_path)).strip()
 
 def transcribe_and_enhance_impl(
     audio_path: str,
