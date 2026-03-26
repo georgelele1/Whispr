@@ -225,6 +225,13 @@ def transcribe_and_enhance_impl(
     except Exception:
         final_text = apply_dictionary_corrections(raw_text)
 
+    # expand snippet triggers (e.g. "/sig" -> "Best regards, John")
+    try:
+        from snippets import apply_snippets
+        final_text = apply_snippets(final_text)
+    except ImportError:
+        pass  # snippets module not available, skip
+
     append_history({
         "ts": now_ms(),
         "audio_path": audio_path,

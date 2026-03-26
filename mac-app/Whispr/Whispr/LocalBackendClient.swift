@@ -74,7 +74,7 @@ final class LocalBackendClient: ObservableObject {
             current.deleteLastPathComponent()
         }
 
-        let fallback = URL(fileURLWithPath: "/Users/yanbowang/Comp9900_project_testversion")
+        let fallback = URL(fileURLWithPath: "/Users/quinta/Desktop/snippet实现和测试报告/Comp9900_project_testversion-main")
         let fallbackBackend = fallback.appendingPathComponent("backend/app.py").path
         if fm.fileExists(atPath: fallbackBackend) {
             return fallback
