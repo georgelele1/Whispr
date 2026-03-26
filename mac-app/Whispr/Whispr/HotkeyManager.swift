@@ -11,10 +11,7 @@ final class HotkeyManager {
     // Start: option + Space
     private let startHotkey = KeyCombo(keyCode: 49, modifiers: [.option])
     
-    // Stop: option Set my calendar for tomorrow.Schedule for tomorrow:
-    - 08:00 AM: love to see what i need to do
-    - 04:00 PM: Client Meeting with aaron
-    - 05:15 PM: idk what to say+ S
+    // Stop: option Set my calendar for tomorrow.+ S
     private let stopHotkey = KeyCombo(keyCode: 1, modifiers: [.option])
 
     // Only compare these modifier bits, ignore device-dependent raw bits
