@@ -167,7 +167,7 @@ def ai_refine_text(text: str, app_name: str = "") -> str:
         return text
 
     app_hint = f"The user is currently using {app_name.strip()}." if app_name.strip() else ""
-    
+
     agent = Agent(
         model="gpt-5",
         name="whispr_text_refiner",
@@ -199,11 +199,16 @@ Output only the final refined text.
     return clean_agent_output(agent.input(instruction))
 
 # =========================================================
+# Transcribe helper
+# =========================================================
+
+def transcribe_audio(audio_path: str) -> str:
+    """Transcribe an audio file to text."""
+    return str(transcribe(audio_path)).strip()
+
+# =========================================================
 # Core
 # =========================================================
-def transcribe_audio(file_path: str) -> str:
-    """Transcribe an audio file to text."""
-    return str(transcribe(file_path)).strip()
 
 def transcribe_and_enhance_impl(
     audio_path: str,
@@ -218,22 +223,16 @@ def transcribe_and_enhance_impl(
             "ts": now_ms(),
         }
 
-    # Transcribe audio to text
     raw_text = transcribe_audio(audio_path)
 
     try:
-        final_text = apply_dictionary_corrections(
+        refined_text = apply_dictionary_corrections(
             ai_refine_text(text=raw_text, app_name=app_name)
         )
+        from snippets import apply_snippets
+        final_text = apply_snippets(refined_text)
     except Exception:
         final_text = apply_dictionary_corrections(raw_text)
-
-    # expand snippet triggers (e.g. "/sig" -> "Best regards, John")
-    try:
-        from snippets import apply_snippets
-        final_text = apply_snippets(final_text)
-    except ImportError:
-        pass  # snippets module not available, skip
 
     append_history({
         "ts": now_ms(),
