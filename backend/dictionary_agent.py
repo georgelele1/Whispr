@@ -16,6 +16,7 @@ APP_NAME = "Whispr"
 DICTIONARY_FILE = "dictionary.json"
 HISTORY_FILE = "history.json"
 
+
 # =========================================================
 # Paths / storage
 # =========================================================
@@ -78,6 +79,7 @@ def register_tool(agent: Agent, fn: Callable[..., Any]) -> None:
                 return
 
     raise RuntimeError("Cannot register tool: unknown connectonion tool API in this install.")
+
 
 # =========================================================
 # Tool functions
@@ -178,6 +180,99 @@ def approve_term(phrase: str, approved: bool = True) -> Dict[str, Any]:
 
     return {"ok": False, "error": f"term not found: {phrase}"}
 
+
+# =========================================================
+# Token-efficient batched update
+# =========================================================
+
+def run_batched_update(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Single agent call for all new items to minimise token usage.
+
+    Instead of one agent call per item, sends all new final_text
+    values in one batched prompt. Strips all other fields first.
+    """
+    from app import prepare_items_for_agent
+
+    texts = prepare_items_for_agent(items)
+
+    if not texts:
+        return {"added": [], "updated": [], "total_terms": len(load_dictionary().get("terms", []))}
+
+    # Join all texts into one prompt — one call instead of N calls
+    combined = "\n---\n".join(texts)
+
+    agent = Agent(
+        model="gpt-5",
+        name="whispr_dictionary_batch_updater",
+        system_prompt=(
+            "You are a dictionary term extractor for a voice transcription app. "
+            "Given a batch of transcribed texts separated by '---', identify "
+            "domain-specific terms, proper nouns, technical words, product names, "
+            "or project names that would benefit from being in a correction dictionary. "
+            "Skip common everyday words. "
+            "Return ONLY a JSON array of objects with keys: "
+            "'phrase' (canonical correct form) and 'aliases' (list of common mishearings). "
+            "Be concise. No explanation, no markdown, just the raw JSON array."
+        )
+    )
+
+    result = agent.input(
+        f"Batch of {len(texts)} transcribed texts:\n\n{combined}\n\n"
+        f"Return JSON array of dictionary terms only."
+    )
+
+    try:
+        new_terms = json.loads(str(result).strip())
+        if not isinstance(new_terms, list):
+            new_terms = []
+    except Exception:
+        new_terms = []
+
+    # Merge into existing dictionary
+    dictionary = load_dictionary()
+    existing = {
+        str(t.get("phrase", "")).lower(): t
+        for t in dictionary.get("terms", [])
+    }
+
+    added = []
+    updated = []
+
+    for term in new_terms:
+        phrase = str(term.get("phrase", "")).strip()
+        if not phrase:
+            continue
+
+        aliases = [str(a).strip() for a in term.get("aliases", []) if str(a).strip()]
+
+        if phrase.lower() in existing:
+            existing_entry = existing[phrase.lower()]
+            merged = set(existing_entry.get("aliases", [])) | set(aliases)
+            existing_entry["aliases"] = sorted(merged)
+            existing_entry["approved"] = True
+            updated.append(existing_entry)
+        else:
+            entry = {
+                "phrase": phrase,
+                "aliases": sorted(aliases),
+                "type": "custom",
+                "source": "agent",
+                "confidence": 1.0,
+                "approved": True,
+            }
+            existing[phrase.lower()] = entry
+            added.append(entry)
+
+    dictionary["terms"] = list(existing.values())
+    save_dictionary(dictionary)
+
+    return {
+        "added": added,
+        "updated": updated,
+        "total_terms": len(dictionary["terms"]),
+    }
+
+
 # =========================================================
 # Agent factory
 # =========================================================
@@ -215,6 +310,7 @@ def create_agent() -> Agent:
 
     return agent
 
+
 # =========================================================
 # CLI / host
 # =========================================================
@@ -227,40 +323,63 @@ if __name__ == "__main__":
 
         try:
             if command == "update":
-                # Snapshot before
-                before_phrases = {
-                    str(t.get("phrase", "")).lower()
-                    for t in load_dictionary().get("terms", [])
-                }
+                from app import (
+                    should_update_dictionary,
+                    mark_dictionary_updated,
+                    get_new_history_since_last_update,
+                    get_optimal_sample_size,
+                )
 
-                # Run the agent
-                agent = create_agent()
-                agent.input("Update the dictionary from recent transcripts.")
+                # Time-based guard — skip if updated recently
+                if not should_update_dictionary():
+                    print(json.dumps({
+                        "ok": True,
+                        "skipped": True,
+                        "reason": "updated recently",
+                        "added": [],
+                        "updated": [],
+                        "total_terms": len(load_dictionary().get("terms", [])),
+                    }, ensure_ascii=False))
+                    sys.exit(0)
 
-                # Diff after
-                after_terms = load_dictionary().get("terms", [])
-                added = []
-                updated = []
-                for term in after_terms:
-                    phrase = str(term.get("phrase", "")).strip()
-                    if not phrase:
-                        continue
-                    entry = {
-                        "phrase": phrase,
-                        "type": term.get("type", "custom"),
-                        "aliases": term.get("aliases", []),
-                        "confidence": term.get("confidence", 1.0),
-                    }
-                    if phrase.lower() not in before_phrases:
-                        added.append(entry)
-                    else:
-                        updated.append(entry)
+                # Get only new records since last update
+                new_items = get_new_history_since_last_update()
+                limit = get_optimal_sample_size(new_items)
+
+                print(
+                    f"New records since last update: {len(new_items)}, "
+                    f"sampling: {limit}",
+                    file=sys.stderr
+                )
+
+                if limit == 0:
+                    print(json.dumps({
+                        "ok": True,
+                        "skipped": True,
+                        "reason": "no new history since last update",
+                        "added": [],
+                        "updated": [],
+                        "total_terms": len(load_dictionary().get("terms", [])),
+                    }, ensure_ascii=False))
+                    sys.exit(0)
+
+                # Sample from new items only
+                items_to_process = new_items[-limit:]
+
+                # Run token-efficient batched update
+                result = run_batched_update(items_to_process)
+
+                # Mark update timestamp
+                mark_dictionary_updated()
 
                 print(json.dumps({
                     "ok": True,
-                    "added": added,
-                    "updated": updated,
-                    "total_terms": len(after_terms),
+                    "skipped": False,
+                    "new_records_found": len(new_items),
+                    "records_processed": len(items_to_process),
+                    "added": result["added"],
+                    "updated": result["updated"],
+                    "total_terms": result["total_terms"],
                 }, ensure_ascii=False))
 
             elif command == "list":
@@ -268,21 +387,22 @@ if __name__ == "__main__":
                 print(json.dumps({"output": result}, ensure_ascii=False))
 
             elif command == "add":
-                # python dictionary_agent.py cli add <phrase> [alias1,alias2] [type]
-                phrase = sys.argv[3] if len(sys.argv) > 3 else ""
-                aliases = sys.argv[4].split(",") if len(sys.argv) > 4 else []
+                phrase     = sys.argv[3] if len(sys.argv) > 3 else ""
+                aliases    = sys.argv[4].split(",") if len(sys.argv) > 4 else []
                 entry_type = sys.argv[5] if len(sys.argv) > 5 else "custom"
                 result = add_or_update_term(phrase=phrase, aliases=aliases, entry_type=entry_type)
                 print(json.dumps({"output": result}, ensure_ascii=False))
 
             elif command == "remove":
-                # python dictionary_agent.py cli remove <phrase>
                 phrase = sys.argv[3] if len(sys.argv) > 3 else ""
                 result = remove_term(phrase=phrase)
                 print(json.dumps({"output": result}, ensure_ascii=False))
 
             else:
-                print(json.dumps({"output": "", "error": f"unknown command: {command}"}, ensure_ascii=False))
+                print(json.dumps({
+                    "output": "",
+                    "error": f"unknown command: {command}"
+                }, ensure_ascii=False))
 
             sys.exit(0)
 
