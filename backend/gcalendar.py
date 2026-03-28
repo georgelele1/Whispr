@@ -140,20 +140,15 @@ def extract_calendar_intent(text: str) -> dict:
     """Extract date and calendar name from transcribed speech in one agent call.
 
     Returns {"date": "today|tomorrow|YYYY-MM-DD", "calendar": "name|all"}.
-    Combined into one call to avoid the latency penalty of two separate calls
-    (benchmark showed extract_calendar_intent at 8.7s vs extract_date alone at 2.5s
-    — keeping them merged is intentional to avoid two round-trips).
+    Prompt kept minimal to avoid token bloat (was causing 14s latency).
     """
     agent = Agent(
         model="gpt-5",
         name="whispr_calendar_intent",
         system_prompt=(
-            "Extract date and calendar name from transcribed speech. "
-            "Return ONLY a JSON object: "
-            "{\"date\": \"today|tomorrow|YYYY-MM-DD\", \"calendar\": \"name or all\"}. "
-            "Use 'all' for calendar if none is specified. "
-            "Use 'today' for date if none is specified. "
-            "No explanation — just the JSON object."
+            "Extract date and calendar from speech. "
+            "Reply ONLY with JSON: {\"date\":\"today|tomorrow|YYYY-MM-DD\",\"calendar\":\"name|all\"}. "
+            "Default date=today, calendar=all if not mentioned. No explanation."
         ),
     )
     try:
