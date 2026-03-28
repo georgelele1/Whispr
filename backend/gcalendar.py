@@ -1,9 +1,12 @@
 """
 Google Calendar integration for Whispr.
 
-Per-user OAuth2 — each machine user gets their own token stored locally.
-First run opens a browser for one-time Google approval; subsequent runs
-refresh silently.
+Per-user OAuth2 — each Google account gets its own token stored locally.
+Token is keyed by the user's actual Google email address, fetched from
+the Google userinfo endpoint after OAuth completes.
+
+First run opens a browser for one-time Google approval.
+Subsequent runs refresh silently using the stored token.
 
 Usage:
     python gcalendar.py today
@@ -32,13 +35,17 @@ from googleapiclient.discovery import build
 from connectonion import Agent
 
 APP_NAME         = "Whispr"
-SCOPES           = ["https://www.googleapis.com/auth/calendar.readonly"]
+SCOPES           = [
+    "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/userinfo.email",   # needed to read email
+    "openid",
+]
 REDIRECT_URI     = "http://localhost:8765/callback"
 CREDENTIALS_FILE = Path(__file__).resolve().parent / "credentials.json"
 
 
 # =========================================================
-# Per-user token storage
+# Per-user token storage (keyed by Google email)
 # =========================================================
 
 def tokens_dir() -> Path:
@@ -54,20 +61,43 @@ def tokens_dir() -> Path:
 
 
 def token_path(user_id: str) -> Path:
-    safe = user_id.replace("@", "_").replace(".", "_")
+    """Return token file path, sanitising the email for use as a filename."""
+    safe = user_id.replace("@", "_at_").replace(".", "_")
     return tokens_dir() / f"{safe}.json"
 
 
+def current_user_email_file() -> Path:
+    """File that stores which Google email the current system user last logged in with."""
+    return tokens_dir() / f"{getpass.getuser()}_current_email.txt"
+
+
+def save_current_email(email: str) -> None:
+    current_user_email_file().write_text(email, encoding="utf-8")
+
+
+def load_current_email() -> str | None:
+    path = current_user_email_file()
+    if path.exists():
+        return path.read_text(encoding="utf-8").strip() or None
+    return None
+
+
 # =========================================================
-# OAuth flow (browser-based, one-time per user)
+# OAuth flow (browser-based, one-time per Google account)
 # =========================================================
 
-def run_oauth_flow(user_id: str) -> Credentials:
+def run_oauth_flow() -> tuple[Credentials, str]:
+    """Open browser for Google login, capture token and return (creds, email)."""
+
     flow = Flow.from_client_secrets_file(
-        str(CREDENTIALS_FILE), scopes=SCOPES, redirect_uri=REDIRECT_URI,
+        str(CREDENTIALS_FILE),
+        scopes=SCOPES,
+        redirect_uri=REDIRECT_URI,
     )
     auth_url, _ = flow.authorization_url(
-        access_type="offline", include_granted_scopes="true", prompt="consent",
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
     )
 
     auth_code   = {"value": None}
@@ -83,11 +113,13 @@ def run_oauth_flow(user_id: str) -> Credentials:
                 self.wfile.write(b"""
                     <html><body style='font-family:sans-serif;text-align:center;padding:60px'>
                     <h2>Whispr connected to Google Calendar</h2>
-                    <p>You can close this tab.</p>
+                    <p>You can close this tab and return to Whispr.</p>
                     </body></html>
                 """)
                 server_done.set()
-        def log_message(self, *_): pass
+
+        def log_message(self, *_):
+            pass
 
     server = HTTPServer(("localhost", 8765), _Handler)
     threading.Thread(target=lambda: server.handle_request(), daemon=True).start()
@@ -101,46 +133,66 @@ def run_oauth_flow(user_id: str) -> Credentials:
 
     flow.fetch_token(code=auth_code["value"])
     creds = flow.credentials
-    token_path(user_id).write_text(creds.to_json(), encoding="utf-8")
-    print(f"Token saved for: {user_id}", file=sys.stderr)
-    return creds
+
+    # Fetch the user's Google email from userinfo endpoint
+    import google.auth.transport.requests
+    import requests as _requests
+    authed_session = google.auth.transport.requests.AuthorizedSession(creds)
+    resp = authed_session.get("https://www.googleapis.com/oauth2/v3/userinfo")
+    email = resp.json().get("email", getpass.getuser())
+
+    # Save token keyed by email
+    path = token_path(email)
+    path.write_text(creds.to_json(), encoding="utf-8")
+    save_current_email(email)
+
+    print(f"Token saved for Google account: {email}", file=sys.stderr)
+    return creds, email
 
 
 # =========================================================
-# Auth
+# Auth — resolves user by Google email, not system username
 # =========================================================
 
-def get_credentials(user_id: str | None = None) -> Credentials:
-    """Return valid credentials, refreshing or re-authenticating as needed."""
-    if user_id is None:
-        user_id = getpass.getuser()
+def get_credentials(user_id: str | None = None) -> tuple[Credentials, str]:
+    """Return (valid_credentials, google_email).
 
-    path  = token_path(user_id)
-    creds = None
+    Resolution order:
+    1. user_id argument (if a Google email was passed explicitly)
+    2. Last logged-in Google email for this system user (stored in tokens dir)
+    3. Trigger OAuth flow to get a new token
+    """
+    # Resolve which email to use
+    email = user_id or load_current_email()
 
-    if path.exists():
-        creds = Credentials.from_authorized_user_file(str(path), SCOPES)
+    if email:
+        path  = token_path(email)
+        creds = None
 
-    if creds and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-        path.write_text(creds.to_json(), encoding="utf-8")
-        return creds
+        if path.exists():
+            creds = Credentials.from_authorized_user_file(str(path), SCOPES)
 
-    if creds and creds.valid:
-        return creds
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            path.write_text(creds.to_json(), encoding="utf-8")
+            return creds, email
 
-    return run_oauth_flow(user_id)
+        if creds and creds.valid:
+            return creds, email
+
+    # No valid token — trigger OAuth
+    return run_oauth_flow()
 
 
 # =========================================================
-# Intent extraction  (combined date + calendar in one call)
+# Intent extraction (date + calendar in one compact call)
 # =========================================================
 
 def extract_calendar_intent(text: str) -> dict:
-    """Extract date and calendar name from transcribed speech in one agent call.
+    """Extract date and calendar name from transcribed speech.
 
     Returns {"date": "today|tomorrow|YYYY-MM-DD", "calendar": "name|all"}.
-    Prompt kept minimal to avoid token bloat (was causing 14s latency).
+    Prompt kept minimal to avoid token bloat.
     """
     agent = Agent(
         model="gpt-5",
@@ -158,18 +210,27 @@ def extract_calendar_intent(text: str) -> dict:
 
 
 def extract_date_from_text(text: str) -> str:
-    """Lightweight date-only extraction (used when calendar name is not needed)."""
-    result = extract_calendar_intent(text)
-    return result.get("date", "today")
+    """Lightweight date-only extraction."""
+    return extract_calendar_intent(text).get("date", "today")
 
 
 # =========================================================
 # Schedule fetcher
 # =========================================================
 
-def get_schedule(date: str = "today", timezone: str = "Australia/Sydney") -> str:
+def get_schedule(
+    date: str = "today",
+    timezone: str = "Australia/Sydney",
+    user_id: str | None = None,
+    calendar_filter: str = "all",
+) -> str:
+    """Fetch and format Google Calendar events for a given date.
+
+    user_id should be a Google email address. If None, uses the last
+    logged-in Google account for this system user.
+    """
     try:
-        creds   = get_credentials(user_id)
+        creds, email = get_credentials(user_id)
         service = build("calendar", "v3", credentials=creds)
 
         tz  = pytz.timezone(timezone)
@@ -188,38 +249,38 @@ def get_schedule(date: str = "today", timezone: str = "Australia/Sydney") -> str
         start = target.replace(hour=0,  minute=0,  second=0,  microsecond=0).isoformat()
         end   = target.replace(hour=23, minute=59, second=59, microsecond=0).isoformat()
 
-        # Get all calendars
-        calendars = service.calendarList().list().execute().get("items", [])
+        # Fetch all calendars then filter if requested
+        all_cals  = service.calendarList().list().execute().get("items", [])
+        calendars = (
+            all_cals
+            if calendar_filter == "all"
+            else [c for c in all_cals if calendar_filter.lower() in c.get("summary", "").lower()]
+        )
 
         all_events = []
         for cal in calendars:
-            cal_id = cal["id"]
-            cal_name = cal.get("summary", cal_id)
-
-            events = service.events().list(
-                calendarId=cal_id,
+            for event in service.events().list(
+                calendarId=cal["id"],
                 timeMin=start,
                 timeMax=end,
                 singleEvents=True,
                 orderBy="startTime",
-            ).execute().get("items", [])
-
-            for event in events:
-                event["_calendar_name"] = cal_name  # tag which calendar it came from
+            ).execute().get("items", []):
+                event["_cal"] = cal.get("summary", cal["id"])
                 all_events.append(event)
 
-        # Sort all events by start time
-        all_events.sort(key=lambda e: e["start"].get("dateTime", e["start"].get("date", "")))
+        all_events.sort(
+            key=lambda e: e["start"].get("dateTime", e["start"].get("date", ""))
+        )
 
         if not all_events:
-            return f"No events found for {date}."
+            return f"No events found for {date} ({email})."
 
-        lines = [f"Schedule for {date}:"]
+        lines = [f"Schedule for {date} ({email}):"]
         for event in all_events:
-            start_raw = event["start"].get("dateTime", event["start"].get("date", ""))
+            raw     = event["start"].get("dateTime", event["start"].get("date", ""))
             summary = event.get("summary", "Untitled event")
-            cal_name = event.get("_calendar_name", "")
-
+            cal     = event.get("_cal", "")
             try:
                 time_str = datetime.fromisoformat(raw).strftime("%I:%M %p")
             except Exception:
@@ -231,10 +292,30 @@ def get_schedule(date: str = "today", timezone: str = "Australia/Sydney") -> str
     except Exception as e:
         return f"Could not fetch calendar: {e}"
 
+
 # =========================================================
 # CLI
 # =========================================================
 
 if __name__ == "__main__":
-    date_arg = sys.argv[1] if len(sys.argv) > 1 else "today"
-    print(get_schedule(date=date_arg))
+    command = sys.argv[1] if len(sys.argv) > 1 else "today"
+
+    # ── get-email: return currently saved Google email ────
+    if command == "get-email":
+        email = load_current_email()
+        print(json.dumps({
+            "ok":    email is not None,
+            "email": email,
+        }, ensure_ascii=False))
+
+    # ── connect: trigger OAuth and return new email ───────
+    elif command == "connect":
+        try:
+            _, email = run_oauth_flow()
+            print(json.dumps({"ok": True, "email": email}, ensure_ascii=False))
+        except Exception as e:
+            print(json.dumps({"ok": False, "email": None, "error": str(e)}, ensure_ascii=False))
+
+    # ── default: treat as date argument for schedule ──────
+    else:
+        print(get_schedule(date=command))
