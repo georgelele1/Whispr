@@ -15,9 +15,9 @@ CLI:
 
 from __future__ import annotations
 
+import getpass
 import json
 import os
-import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
@@ -78,7 +78,7 @@ def list_all() -> Dict[str, Any]:
 
 def add_snippet(trigger: str, expansion: str) -> Dict[str, Any]:
     """Add a new snippet or update an existing one."""
-    trigger = str(trigger or "").strip()
+    trigger   = str(trigger or "").strip()
     expansion = str(expansion or "").strip()
 
     if not trigger:
@@ -86,23 +86,17 @@ def add_snippet(trigger: str, expansion: str) -> Dict[str, Any]:
     if not expansion:
         return {"ok": False, "error": "expansion text is required"}
 
-    data = load_snippets()
+    data     = load_snippets()
     snippets = data.get("snippets", [])
 
-    # check if trigger already exists - update it
     for item in snippets:
         if str(item.get("trigger", "")).lower() == trigger.lower():
             item["expansion"] = expansion
-            item["enabled"] = True
+            item["enabled"]   = True
             save_snippets(data)
             return {"ok": True, "updated": True, "snippet": item}
 
-    # new entry
-    entry = {
-        "trigger": trigger,
-        "expansion": expansion,
-        "enabled": True,
-    }
+    entry = {"trigger": trigger, "expansion": expansion, "enabled": True}
     snippets.append(entry)
     data["snippets"] = snippets
     save_snippets(data)
@@ -115,7 +109,7 @@ def remove_snippet(trigger: str) -> Dict[str, Any]:
     if not trigger:
         return {"ok": False, "error": "trigger is required"}
 
-    data = load_snippets()
+    data     = load_snippets()
     snippets = data.get("snippets", [])
     filtered = [s for s in snippets if str(s.get("trigger", "")).lower() != trigger.lower()]
 
@@ -185,9 +179,12 @@ def handle_dynamic_trigger(trigger: str, text: str) -> str:
 
     if trigger_lower == "calendar":
         try:
-            from gcalendar import get_schedule, extract_date_from_text
-            date = extract_date_from_text(text)
-            return get_schedule(date=date)
+            from gcalendar import get_schedule, extract_calendar_intent
+            intent          = extract_calendar_intent(text)
+            date            = intent.get("date", "today")
+            calendar_filter = intent.get("calendar", "all")
+            user_id         = getpass.getuser()
+            return get_schedule(date=date, user_id=user_id, calendar_filter=calendar_filter)
         except Exception as e:
             return f"Could not fetch calendar: {str(e)}"
 
@@ -210,7 +207,6 @@ def apply_snippets(text: str) -> str:
 
     data = load_snippets()
 
-    # Build a map of trigger -> expansion for enabled snippets only
     snippets = {
         item["trigger"]: item["expansion"]
         for item in data.get("snippets", [])
@@ -222,17 +218,14 @@ def apply_snippets(text: str) -> str:
     if not snippets:
         return text
 
-    # Single agent call to detect all intended triggers at once
     matched_triggers = should_expand_snippets(text, list(snippets.keys()))
 
     result = text
     for trigger in matched_triggers:
         if trigger in snippets:
-            # Dynamic triggers fetch live data
             if trigger.lower() in DYNAMIC_TRIGGERS:
                 result = handle_dynamic_trigger(trigger, text)
             else:
-                # Static expansion
                 result = snippets[trigger]
             break
 
@@ -257,28 +250,24 @@ if __name__ == "__main__":
             print(json.dumps(result, ensure_ascii=False))
 
         elif command == "add":
-            # python snippets.py cli add <trigger> <expansion>
-            trigger = sys.argv[3] if len(sys.argv) > 3 else ""
+            trigger   = sys.argv[3] if len(sys.argv) > 3 else ""
             expansion = sys.argv[4] if len(sys.argv) > 4 else ""
-            result = add_snippet(trigger, expansion)
+            result    = add_snippet(trigger, expansion)
             print(json.dumps(result, ensure_ascii=False))
 
         elif command == "remove":
-            # python snippets.py cli remove <trigger>
             trigger = sys.argv[3] if len(sys.argv) > 3 else ""
-            result = remove_snippet(trigger)
+            result  = remove_snippet(trigger)
             print(json.dumps(result, ensure_ascii=False))
 
         elif command == "toggle":
-            # python snippets.py cli toggle <trigger> <true|false>
             trigger = sys.argv[3] if len(sys.argv) > 3 else ""
             enabled = sys.argv[4].lower() not in ("false", "0", "no") if len(sys.argv) > 4 else True
-            result = toggle_snippet(trigger, enabled)
+            result  = toggle_snippet(trigger, enabled)
             print(json.dumps(result, ensure_ascii=False))
 
         elif command == "expand":
-            # python snippets.py cli expand <text>
-            text = sys.argv[3] if len(sys.argv) > 3 else ""
+            text     = sys.argv[3] if len(sys.argv) > 3 else ""
             expanded = apply_snippets(text)
             print(json.dumps({"ok": True, "original": text, "expanded": expanded}, ensure_ascii=False))
 
