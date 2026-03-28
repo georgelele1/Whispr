@@ -379,4 +379,65 @@ final class LocalBackendClient: ObservableObject {
             completion(lang)
         }
     }
+
+    // =========================================================
+    // Google Calendar account management
+    // =========================================================
+
+    /// Read the currently saved Google email from the Python tokens directory.
+    func fetchCalendarEmail(completion: @escaping (String?) -> Void) {
+        guard let backendScriptPath else {
+            completion(nil)
+            return
+        }
+
+        let calendarScript = URL(fileURLWithPath: backendScriptPath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("gcalendar.py")
+            .path
+
+        runPythonCommand(
+            script: calendarScript,
+            arguments: ["get-email"]
+        ) { result in
+            guard case .success(let output) = result,
+                  let data = output.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let email = json["email"] as? String
+            else {
+                completion(nil)
+                return
+            }
+            completion(email)
+        }
+    }
+
+    /// Trigger the Python OAuth flow to connect or switch Google account.
+    /// Opens a browser window for the user to approve access.
+    func connectGoogleCalendar(completion: @escaping (String?) -> Void) {
+        guard let backendScriptPath else {
+            completion(nil)
+            return
+        }
+
+        let calendarScript = URL(fileURLWithPath: backendScriptPath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("gcalendar.py")
+            .path
+
+        runPythonCommand(
+            script: calendarScript,
+            arguments: ["connect"]
+        ) { result in
+            guard case .success(let output) = result,
+                  let data = output.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let email = json["email"] as? String
+            else {
+                completion(nil)
+                return
+            }
+            completion(email)
+        }
+    }
 }

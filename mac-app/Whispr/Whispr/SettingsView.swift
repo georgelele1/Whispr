@@ -1,10 +1,10 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @State private var selectedLanguage = Config.targetLanguage
+    @State private var selectedLanguage   = Config.targetLanguage
     @State private var syncStatus: String = ""
+    @State private var calendarEmail: String = "Not connected"
 
-    // Inject the backend client so we can sync language to Python
     var backendClient: LocalBackendClient?
 
     var body: some View {
@@ -48,7 +48,6 @@ struct SettingsView: View {
                         syncStatus = "Saving..."
                         backendClient?.syncLanguageToBackend { success in
                             syncStatus = success ? "Saved" : "Saved locally"
-                            // Clear status after 2 seconds
                             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                                 syncStatus = ""
                             }
@@ -65,6 +64,37 @@ struct SettingsView: View {
 
             Divider()
 
+            // ── Google Calendar ───────────────────────────────
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Google Calendar")
+                    .font(.headline)
+
+                HStack(spacing: 10) {
+                    Image(systemName: calendarEmail == "Not connected" ? "calendar.badge.exclamationmark" : "calendar.badge.checkmark")
+                        .foregroundColor(calendarEmail == "Not connected" ? .orange : .green)
+
+                    Text(calendarEmail)
+                        .font(.subheadline)
+                        .foregroundColor(calendarEmail == "Not connected" ? .secondary : .primary)
+                }
+
+                if calendarEmail == "Not connected" {
+                    Button("Connect Google Calendar") {
+                        connectCalendar()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                } else {
+                    Button("Switch account") {
+                        connectCalendar()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+
+            Divider()
+
             // ── Backend info ──────────────────────────────────
             Group {
                 Text("Backend: local Python CLI")
@@ -75,15 +105,36 @@ struct SettingsView: View {
 
         }
         .padding()
-        .frame(width: 420, height: 280)
+        .frame(width: 420, height: 360)
         .onAppear {
-            // Load language from backend on open to stay in sync
+            loadCurrentCalendarEmail()
+
+            // Sync language from backend
             backendClient?.fetchLanguageFromBackend { lang in
                 if let lang = lang, Config.supportedLanguages.contains(lang) {
-                    selectedLanguage    = lang
+                    selectedLanguage      = lang
                     Config.targetLanguage = lang
                 }
             }
+        }
+    }
+
+    // =========================================================
+    // Helpers
+    // =========================================================
+
+    /// Read the saved Google email from the Python tokens directory.
+    private func loadCurrentCalendarEmail() {
+        backendClient?.fetchCalendarEmail { email in
+            calendarEmail = email ?? "Not connected"
+        }
+    }
+
+    /// Trigger the Python OAuth flow to connect / switch Google account.
+    private func connectCalendar() {
+        calendarEmail = "Connecting..."
+        backendClient?.connectGoogleCalendar { email in
+            calendarEmail = email ?? "Not connected"
         }
     }
 }
