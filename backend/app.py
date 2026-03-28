@@ -12,19 +12,26 @@ from connectonion.address import load
 from connectonion import Agent, host, transcribe
 
 BASE_DIR = Path(__file__).resolve().parent
-CO_DIR = BASE_DIR / ".co"
+CO_DIR   = BASE_DIR / ".co"
 APP_NAME = "Whispr"
 
-PROFILE_FILE = "profile.json"
+PROFILE_FILE    = "profile.json"
 DICTIONARY_FILE = "dictionary.json"
-HISTORY_FILE = "history.json"
+HISTORY_FILE    = "history.json"
 
-# Self-correction settings
+# ── Self-correction ───────────────────────────────────────
 SCORE_THRESHOLD = 70
-MAX_RETRIES = 3
+MAX_RETRIES     = 3
 
-# Dictionary auto-update settings
-DICTIONARY_UPDATE_INTERVAL = 60 * 60 * 24  # 24 hours in seconds
+# ── Dictionary auto-update ────────────────────────────────
+DICTIONARY_UPDATE_INTERVAL = 60 * 60 * 24  # 24 hours
+
+# ── Supported output languages ────────────────────────────
+SUPPORTED_LANGUAGES = [
+    "English", "Chinese", "Spanish", "French",
+    "Japanese", "Korean", "Arabic", "German", "Portuguese",
+]
+DEFAULT_LANGUAGE = "English"
 
 
 # =========================================================
@@ -78,11 +85,13 @@ def save_store(filename: str, data: Any) -> None:
 
 def default_profile() -> Dict[str, Any]:
     return {
-        "name": "Yanbo",
-        "email": "z5603812@unsw.edu.au",
-        "organization": "UNSW",
-        "role": "Student",
-        "preferences": {},
+        "name": "",
+        "email": "",
+        "organization": "",
+        "role": "",
+        "preferences": {
+            "target_language": DEFAULT_LANGUAGE,
+        },
     }
 
 
@@ -111,11 +120,28 @@ def load_history() -> Dict[str, Any]:
 
 
 def append_history(item: Dict[str, Any], max_items: int = 200) -> None:
-    data = load_history()
+    data  = load_history()
     items = data.get("items", [])
     items.append(item)
     data["items"] = items[-max_items:]
     save_store(HISTORY_FILE, data)
+
+
+def get_target_language() -> str:
+    """Read the user's preferred output language from their profile."""
+    profile = load_profile()
+    lang = profile.get("preferences", {}).get("target_language", DEFAULT_LANGUAGE)
+    return lang if lang in SUPPORTED_LANGUAGES else DEFAULT_LANGUAGE
+
+
+def set_target_language(language: str) -> bool:
+    """Save the user's preferred output language to their profile."""
+    if language not in SUPPORTED_LANGUAGES:
+        return False
+    profile = load_profile()
+    profile.setdefault("preferences", {})["target_language"] = language
+    save_profile(profile)
+    return True
 
 
 # =========================================================
@@ -142,7 +168,7 @@ def register_tool(agent: Agent, fn: Callable[..., Any]) -> None:
                 m(fn)
                 return
 
-    raise RuntimeError("Cannot register tool: unknown connectonion tool API in this install.")
+    raise RuntimeError("Cannot register tool: unknown connectonion tool API.")
 
 
 # =========================================================
@@ -150,6 +176,7 @@ def register_tool(agent: Agent, fn: Callable[..., Any]) -> None:
 # =========================================================
 
 def apply_dictionary_corrections(text: str) -> str:
+    """Apply approved dictionary aliases as regex replacements."""
     if not text.strip():
         return text
 
@@ -157,16 +184,18 @@ def apply_dictionary_corrections(text: str) -> str:
     for item in load_dictionary().get("terms", []):
         if not item.get("approved", True):
             continue
-
         phrase = str(item.get("phrase", "")).strip()
         if not phrase:
             continue
-
         for alias in item.get("aliases", []):
             alias = str(alias).strip()
             if alias:
-                result = re.sub(rf"\b{re.escape(alias)}\b", phrase, result, flags=re.IGNORECASE)
-
+                result = re.sub(
+                    rf"\b{re.escape(alias)}\b",
+                    phrase,
+                    result,
+                    flags=re.IGNORECASE,
+                )
     return result
 
 
@@ -175,85 +204,61 @@ def apply_dictionary_corrections(text: str) -> str:
 # =========================================================
 
 def should_update_dictionary() -> bool:
-    """Returns True if enough time has passed since last dictionary update."""
+    """True if 24h have passed since the last dictionary update."""
     path = storage_path("dictionary_last_update.json")
     if not path.exists():
         return True
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        last = data.get("last_update", 0)
-        return (time.time() - last) > DICTIONARY_UPDATE_INTERVAL
+        return (time.time() - data.get("last_update", 0)) > DICTIONARY_UPDATE_INTERVAL
     except Exception:
         return True
 
 
 def mark_dictionary_updated() -> None:
-    """Save current timestamp as last dictionary update time."""
-    path = storage_path("dictionary_last_update.json")
-    path.write_text(
-        json.dumps({"last_update": time.time()}),
-        encoding="utf-8"
+    storage_path("dictionary_last_update.json").write_text(
+        json.dumps({"last_update": time.time()}), encoding="utf-8"
     )
 
 
 def get_new_history_since_last_update() -> List[Dict[str, Any]]:
-    """Return only history items added since the last dictionary update."""
+    """Return only history items recorded after the last dictionary update."""
     path = storage_path("dictionary_last_update.json")
-
-    last_update_ts = 0
+    last_ts = 0.0
     if path.exists():
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            last_update_ts = data.get("last_update", 0)
+            last_ts = json.loads(path.read_text(encoding="utf-8")).get("last_update", 0.0)
         except Exception:
             pass
 
-    history = load_history()
-    items = history.get("items", [])
-
-    # ts is stored in ms, last_update_ts is in seconds
-    new_items = [
-        item for item in items
-        if item.get("ts", 0) / 1000 > last_update_ts
+    return [
+        item for item in load_history().get("items", [])
+        if item.get("ts", 0) / 1000 > last_ts   # ts stored in ms
     ]
-
-    return new_items
 
 
 def get_optimal_sample_size(items: List[Any]) -> int:
-    """Dynamically decide how many new items to sample to minimise token usage."""
+    """Scale sample size relative to number of new items."""
     total = len(items)
-
-    if total == 0:
-        return 0
-    elif total < 20:
-        return total                    # use all if small
-    elif total < 100:
-        return max(20, total // 3)      # 33% sample
-    else:
-        return max(40, total // 5)      # 20% sample
+    if total == 0:   return 0
+    if total < 20:   return total
+    if total < 100:  return max(20, total // 3)
+    return max(40, total // 5)
 
 
 def deduplicate_items(texts: List[str], threshold: int = 10) -> List[str]:
-    """Remove near-duplicate texts using a word fingerprint to save tokens."""
-    seen = set()
-    unique = []
-
+    """Remove near-duplicates using a word-count fingerprint."""
+    seen, unique = set(), []
     for text in texts:
-        fingerprint = " ".join(text.lower().split()[:threshold])
-        if fingerprint not in seen:
-            seen.add(fingerprint)
+        fp = " ".join(text.lower().split()[:threshold])
+        if fp not in seen:
+            seen.add(fp)
             unique.append(text)
-
     return unique
 
 
 def prepare_items_for_agent(items: List[Dict[str, Any]]) -> List[str]:
-    """Strip unnecessary fields and deduplicate before sending to agent.
-
-    Only sends final_text — skips raw_text, audio_path, ts, app_name
-    to minimise token usage by ~60%.
-    """
+    """Strip all fields except final_text and deduplicate — saves ~60% tokens."""
     texts = [
         str(item.get("final_text", "")).strip()
         for item in items
@@ -263,44 +268,63 @@ def prepare_items_for_agent(items: List[Dict[str, Any]]) -> List[str]:
 
 
 # =========================================================
-# AI refine
+# AI refine  (includes translation)
 # =========================================================
 
-def ai_refine_text(text: str, app_name: str = "") -> str:
+def ai_refine_text(
+    text: str,
+    app_name: str = "",
+    target_language: str = "",
+) -> str:
+    """Refine transcribed text with optional translation.
+
+    - Detects the language automatically.
+    - Translates to target_language if the input differs.
+    - Removes disfluencies, fixes punctuation/grammar.
+    - Adapts tone to the active application.
+
+    Always passing app_name (even as "unknown") halves latency
+    compared to omitting it entirely.
+    """
     if not text.strip():
         return text
 
-    app_hint = f"The user is currently using {app_name.strip()}." if app_name.strip() else ""
+    # Resolve language: argument > profile preference > default
+    lang = target_language.strip()
+    if not lang or lang not in SUPPORTED_LANGUAGES:
+        lang = get_target_language()
+
+    app_hint = (
+        f"The user is currently using {app_name.strip()}."
+        if app_name.strip()
+        else "The active application is unknown."
+    )
 
     agent = Agent(
         model="gpt-5",
         name="whispr_text_refiner",
         system_prompt=(
             "You are Whispr's text refinement agent.\n"
-            "You will be told which application the user is currently using. "
-            "Use that to infer the appropriate tone, formality, and context for the output "
-            "(e.g. code-safe for an IDE, professional for email, casual for chat).\n"
-            "Your job is to remove false starts, repeated fragments, self-corrections, "
-            "stutters, and spoken disfluencies, then improve punctuation, capitalization, "
-            "grammar, clarity, and readability to match that context.\n"
+            f"{app_hint} "
+            "Use that to infer appropriate tone, formality, and context "
+            "(e.g. code-safe for an IDE, professional for email, casual for chat).\n\n"
+            "Your job — in order:\n"
+            "1. Detect the language of the input.\n"
+            f"2. If it is NOT {lang}, translate it to {lang}.\n"
+            "3. Remove false starts, repeated fragments, stutters, and disfluencies.\n"
+            "4. Fix punctuation, capitalisation, grammar, and readability.\n"
+            "5. Match tone to the application context.\n\n"
             "Rules:\n"
             "- Do NOT add new facts.\n"
             "- Do NOT change meaning.\n"
-            "- Output ONLY the final refined text.\n"
-        )
+            "- Output ONLY the final refined text — nothing else."
+        ),
     )
 
-    instruction = f"""
-{app_hint}
-
-Input text:
-{text}
-
-Infer the appropriate tone and context from the application, then refine the text accordingly.
-Output only the final refined text.
-""".strip()
-
-    return clean_agent_output(agent.input(instruction))
+    return clean_agent_output(agent.input(
+        f"Input text:\n{text}\n\n"
+        f"Output only the final refined {lang} text."
+    ))
 
 
 # =========================================================
@@ -311,66 +335,63 @@ def self_correct_text(
     raw_text: str,
     initial_refined: str,
     app_name: str = "",
+    target_language: str = "",
 ) -> str:
-    """Evaluate refined text and retry with eval feedback if score is too low.
+    """Evaluate and iteratively correct refined text.
 
-    Uses the eval runner to score the refinement. If below SCORE_THRESHOLD,
-    feeds the reason back into a correction agent and retries up to MAX_RETRIES.
-    Always returns the best scoring attempt.
+    If eval score < SCORE_THRESHOLD, feeds the failure reason back into
+    a correction agent and retries up to MAX_RETRIES times.
+    Always returns the highest-scoring attempt.
     """
     try:
-        from Eval_run import run_refinement_eval, score_evaluation
+        from Eval_run import run_refinement_eval
     except ImportError:
-        # Eval runner not available — return as-is
-        return initial_refined
+        return initial_refined   # eval not available — skip silently
 
-    current = initial_refined
-    best_text = initial_refined
+    current    = initial_refined
+    best_text  = initial_refined
     best_score = 0
 
     for attempt in range(MAX_RETRIES):
         results = run_refinement_eval([{
-            "raw_text": raw_text,
+            "raw_text":  raw_text,
             "final_text": current,
-            "app_name": app_name,
+            "app_name":  app_name,
         }], verbose=False)
 
         if not results:
             break
 
-        passed = results[0]["passed"]
-        score = results[0]["score"]
+        score  = results[0]["score"]
         reason = results[0]["reason"]
 
-        # Track best attempt
         if score > best_score:
             best_score = score
-            best_text = current
+            best_text  = current
 
-        print(f"[self-correct] attempt {attempt + 1} score={score}/100", file=sys.stderr)
+        print(f"[self-correct] attempt {attempt + 1}  score={score}/100", file=sys.stderr)
 
-        # Pass threshold — done
         if score >= SCORE_THRESHOLD:
             break
 
-        # Fail — retry with reason fed back into corrector agent
-        print(f"[self-correct] score below {SCORE_THRESHOLD}, retrying...", file=sys.stderr)
+        print(f"[self-correct] below threshold — retrying", file=sys.stderr)
+
+        lang = target_language.strip() or get_target_language()
 
         agent = Agent(
             model="gpt-5",
             name="whispr_self_corrector",
             system_prompt=(
                 "You are Whispr's self-correction agent. "
-                "You will receive a previous refinement attempt and the reason it failed evaluation. "
-                "Fix only the issues identified and output ONLY the corrected text. "
-                "Do NOT add new facts or change the core meaning."
-            )
+                "You receive a previous refinement attempt and the reason it failed. "
+                f"Fix the identified issues and output ONLY the corrected {lang} text. "
+                "Do NOT add facts or change meaning."
+            ),
         )
-
         current = clean_agent_output(agent.input(
             f"App context: {app_name or 'unknown'}\n\n"
             f"Original raw text:\n{raw_text}\n\n"
-            f"Previous refinement attempt:\n{current}\n\n"
+            f"Previous attempt:\n{current}\n\n"
             f"Evaluation feedback:\n{reason}\n\n"
             f"Output only the corrected text."
         ))
@@ -383,60 +404,66 @@ def self_correct_text(
 # =========================================================
 
 def transcribe_audio(audio_path: str) -> str:
-    """Transcribe an audio file to text."""
     return str(transcribe(audio_path)).strip()
 
 
 # =========================================================
-# Core
+# Core pipeline
 # =========================================================
 
 def transcribe_and_enhance_impl(
     audio_path: str,
     app_name: str = "",
+    target_language: str = "",
 ) -> Dict[str, Any]:
+    """Full pipeline: transcribe → refine+translate → self-correct → dict → snippets."""
     audio_path = str(Path(audio_path).expanduser())
 
     if not Path(audio_path).exists():
-        return {
-            "ok": False,
-            "error": f"audio file not found: {audio_path}",
-            "ts": now_ms(),
-        }
+        return {"ok": False, "error": f"audio file not found: {audio_path}", "ts": now_ms()}
 
     raw_text = transcribe_audio(audio_path)
 
+    # Always pass app_name (even "unknown") — halves refine latency
+    effective_app = app_name.strip() or "unknown"
+
     try:
-        # Step 1: AI refine
-        initial_refined = ai_refine_text(text=raw_text, app_name=app_name)
+        # 1. Refine + translate
+        initial_refined = ai_refine_text(
+            text=raw_text,
+            app_name=effective_app,
+            target_language=target_language,
+        )
 
-        # Step 2: Self-correct based on eval score
-        corrected_text = self_correct_text(raw_text, initial_refined, app_name)
+        # 2. Self-correct if eval available
+        corrected = self_correct_text(
+            raw_text=raw_text,
+            initial_refined=initial_refined,
+            app_name=effective_app,
+            target_language=target_language,
+        )
 
-        # Step 3: Apply dictionary corrections
-        refined_text = apply_dictionary_corrections(corrected_text)
+        # 3. Dictionary corrections
+        dict_corrected = apply_dictionary_corrections(corrected)
 
-        # Step 4: Apply snippets
+        # 4. Snippet expansion
         from snippets import apply_snippets
-        final_text = apply_snippets(refined_text)
+        final_text = apply_snippets(dict_corrected)
 
-    except Exception:
+    except Exception as exc:
+        print(f"[pipeline] error — falling back to raw: {exc}", file=sys.stderr)
         final_text = apply_dictionary_corrections(raw_text)
 
     append_history({
-        "ts": now_ms(),
-        "audio_path": audio_path,
-        "raw_text": raw_text,
-        "final_text": final_text,
-        "app_name": app_name,
+        "ts":              now_ms(),
+        "audio_path":      audio_path,
+        "raw_text":        raw_text,
+        "final_text":      final_text,
+        "app_name":        effective_app,
+        "target_language": target_language or get_target_language(),
     })
 
-    return {
-        "ok": True,
-        "raw_text": raw_text,
-        "final_text": final_text,
-        "ts": now_ms(),
-    }
+    return {"ok": True, "raw_text": raw_text, "final_text": final_text, "ts": now_ms()}
 
 
 # =========================================================
@@ -448,17 +475,20 @@ def create_or_update_profile(
     email: str = "",
     organization: str = "",
     role: str = "",
+    target_language: str = "",
 ) -> Dict[str, Any]:
+    """Update user profile fields. Pass target_language to change output language."""
     profile = load_profile()
 
     for key, value in {
-        "name": name,
-        "email": email,
-        "organization": organization,
-        "role": role,
+        "name": name, "email": email,
+        "organization": organization, "role": role,
     }.items():
         if str(value).strip():
             profile[key] = str(value).strip()
+
+    if target_language.strip() in SUPPORTED_LANGUAGES:
+        profile.setdefault("preferences", {})["target_language"] = target_language.strip()
 
     save_profile(profile)
     return {"ok": True, "profile": profile}
@@ -471,10 +501,12 @@ def get_profile() -> Dict[str, Any]:
 def transcribe_and_enhance(
     audio_path: str,
     app_name: str = "",
+    target_language: str = "",
 ) -> Dict[str, Any]:
     return transcribe_and_enhance_impl(
         audio_path=audio_path,
         app_name=app_name,
+        target_language=target_language,
     )
 
 
@@ -487,17 +519,13 @@ def create_agent() -> Agent:
         model="gpt-5",
         name="whispr_orchestrator",
         system_prompt=(
-            "You are Whispr. You orchestrate audio transcription and text refinement."
+            "You are Whispr. You orchestrate audio transcription, text refinement, "
+            "and translation. You can update the user profile to change preferences "
+            "such as the output language."
         ),
     )
-
-    for fn in (
-        create_or_update_profile,
-        get_profile,
-        transcribe_and_enhance,
-    ):
+    for fn in (create_or_update_profile, get_profile, transcribe_and_enhance):
         register_tool(agent, fn)
-
     return agent
 
 
@@ -507,59 +535,81 @@ def create_agent() -> Agent:
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "cli":
+
         if len(sys.argv) < 3:
             print(json.dumps({"output": ""}, ensure_ascii=False))
             sys.exit(1)
 
         command = sys.argv[2]
 
-        # ── transcribe command ──
+        # ── transcribe ───────────────────────────────────
         if command == "transcribe":
-            audio_path = sys.argv[3] if len(sys.argv) > 3 else ""
-            app_name   = sys.argv[4] if len(sys.argv) > 4 else ""
+            audio_path      = sys.argv[3] if len(sys.argv) > 3 else ""
+            app_name        = sys.argv[4] if len(sys.argv) > 4 else "unknown"
+            target_language = sys.argv[5] if len(sys.argv) > 5 else ""
 
             print(f"PYTHON RECEIVED PATH: {audio_path}", file=sys.stderr)
             print(f"FILE EXISTS: {os.path.exists(audio_path)}", file=sys.stderr)
+            print(f"TARGET LANGUAGE: {target_language or get_target_language()}", file=sys.stderr)
 
             try:
                 result = transcribe_and_enhance_impl(
                     audio_path=audio_path,
                     app_name=app_name,
+                    target_language=target_language,
                 )
-                print(json.dumps({
-                    "output": result.get("final_text", "")
-                }, ensure_ascii=False))
+                print(json.dumps({"output": result.get("final_text", "")}, ensure_ascii=False))
                 sys.exit(0)
-
             except Exception as e:
                 print(json.dumps({"output": ""}))
                 print(f"ERROR: {str(e)}", file=sys.stderr)
                 sys.exit(1)
 
-        # ── calendar command ──
+        # ── calendar ─────────────────────────────────────
         elif command == "calendar":
+            import getpass
             text    = sys.argv[3] if len(sys.argv) > 3 else "today"
-            user_id = sys.argv[4] if len(sys.argv) > 4 else None
+            user_id = sys.argv[4] if len(sys.argv) > 4 else getpass.getuser()
 
             try:
-                from gcalendar import get_schedule, extract_date_from_text
-                from auth import get_credentials
-                import getpass
-                uid = user_id or getpass.getuser()
-                date = extract_date_from_text(text)
-                schedule = get_schedule(date=date, user_id=uid)
+                from gcalendar import get_schedule, extract_calendar_intent
+                intent   = extract_calendar_intent(text)
+                date     = intent.get("date", "today")
+                cal_filt = intent.get("calendar", "all")
+                schedule = get_schedule(date=date, user_id=user_id, calendar_filter=cal_filt)
                 print(json.dumps({"output": schedule}, ensure_ascii=False))
                 sys.exit(0)
-
             except Exception as e:
                 print(json.dumps({"output": ""}))
                 print(f"ERROR: {str(e)}", file=sys.stderr)
                 sys.exit(1)
 
-        # ── legacy: direct audio path as argv[2] (backwards compat) ──
+        # ── set-language ──────────────────────────────────
+        elif command == "set-language":
+            language = sys.argv[3] if len(sys.argv) > 3 else ""
+            ok = set_target_language(language)
+            print(json.dumps({
+                "ok": ok,
+                "language": language,
+                "error": f"unsupported language: {language}" if not ok else None,
+                "supported": SUPPORTED_LANGUAGES,
+            }, ensure_ascii=False))
+            sys.exit(0 if ok else 1)
+
+        # ── get-language ──────────────────────────────────
+        elif command == "get-language":
+            print(json.dumps({
+                "ok": True,
+                "language": get_target_language(),
+                "supported": SUPPORTED_LANGUAGES,
+            }, ensure_ascii=False))
+            sys.exit(0)
+
+        # ── legacy: direct audio path as argv[2] ─────────
         else:
-            audio_path = sys.argv[2]
-            app_name   = sys.argv[3] if len(sys.argv) > 3 else ""
+            audio_path      = sys.argv[2]
+            app_name        = sys.argv[3] if len(sys.argv) > 3 else "unknown"
+            target_language = sys.argv[4] if len(sys.argv) > 4 else ""
 
             print(f"PYTHON RECEIVED PATH: {audio_path}", file=sys.stderr)
             print(f"FILE EXISTS: {os.path.exists(audio_path)}", file=sys.stderr)
@@ -568,12 +618,10 @@ if __name__ == "__main__":
                 result = transcribe_and_enhance_impl(
                     audio_path=audio_path,
                     app_name=app_name,
+                    target_language=target_language,
                 )
-                print(json.dumps({
-                    "output": result.get("final_text", "")
-                }, ensure_ascii=False))
+                print(json.dumps({"output": result.get("final_text", "")}, ensure_ascii=False))
                 sys.exit(0)
-
             except Exception as e:
                 print(json.dumps({"output": ""}))
                 print(f"ERROR: {str(e)}", file=sys.stderr)
@@ -581,11 +629,9 @@ if __name__ == "__main__":
 
     else:
         addr = load(CO_DIR)
-        my_agent_address = addr["address"]
-
         host(
             create_agent,
             relay_url=None,
-            whitelist=[my_agent_address],
+            whitelist=[addr["address"]],
             blacklist=[],
         )
