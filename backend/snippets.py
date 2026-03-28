@@ -1,15 +1,16 @@
 """
 Snippets module for Whispr.
 
-Manages voice shortcuts that expand to full text.
-e.g. user says "give me my calendar link" -> pastes full Calendly URL
-e.g. user says "what's my schedule for tomorrow" -> fetches Google Calendar events
+Voice shortcuts that expand to full text or live data.
+  "give me my zoom link"          → pastes static URL
+  "what's my schedule tomorrow"   → fetches Google Calendar events
 
 Storage: ~/Library/Application Support/Whispr/snippets.json
 CLI:
     python snippets.py cli list
     python snippets.py cli add <trigger> <expansion>
     python snippets.py cli remove <trigger>
+    python snippets.py cli toggle <trigger> <true|false>
     python snippets.py cli expand <text>
 """
 
@@ -24,10 +25,10 @@ from typing import Any, Dict, List
 
 from connectonion import Agent
 
-APP_NAME = "Whispr"
-SNIPPETS_FILE = "snippets.json"
+APP_NAME       = "Whispr"
+SNIPPETS_FILE  = "snippets.json"
 
-# Triggers that are handled dynamically (not static expansions)
+# Triggers handled dynamically (fetch live data instead of static text)
 DYNAMIC_TRIGGERS = {"calendar"}
 
 
@@ -62,29 +63,23 @@ def load_snippets() -> Dict[str, Any]:
 
 
 def save_snippets(data: Dict[str, Any]) -> None:
-    path = storage_path()
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    storage_path().write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 # =========================================================
-# CRUD operations
+# CRUD
 # =========================================================
 
 def list_all() -> Dict[str, Any]:
-    """Return all snippets."""
     data = load_snippets()
     return {"ok": True, "snippets": data.get("snippets", []), "count": len(data.get("snippets", []))}
 
 
 def add_snippet(trigger: str, expansion: str) -> Dict[str, Any]:
-    """Add a new snippet or update an existing one."""
-    trigger   = str(trigger or "").strip()
+    trigger   = str(trigger   or "").strip()
     expansion = str(expansion or "").strip()
-
-    if not trigger:
-        return {"ok": False, "error": "trigger is required"}
-    if not expansion:
-        return {"ok": False, "error": "expansion text is required"}
+    if not trigger:   return {"ok": False, "error": "trigger is required"}
+    if not expansion: return {"ok": False, "error": "expansion text is required"}
 
     data     = load_snippets()
     snippets = data.get("snippets", [])
@@ -104,7 +99,6 @@ def add_snippet(trigger: str, expansion: str) -> Dict[str, Any]:
 
 
 def remove_snippet(trigger: str) -> Dict[str, Any]:
-    """Remove a snippet by trigger."""
     trigger = str(trigger or "").strip()
     if not trigger:
         return {"ok": False, "error": "trigger is required"}
@@ -122,7 +116,6 @@ def remove_snippet(trigger: str) -> Dict[str, Any]:
 
 
 def toggle_snippet(trigger: str, enabled: bool = True) -> Dict[str, Any]:
-    """Enable or disable a snippet."""
     trigger = str(trigger or "").strip()
     if not trigger:
         return {"ok": False, "error": "trigger is required"}
@@ -138,28 +131,31 @@ def toggle_snippet(trigger: str, enabled: bool = True) -> Dict[str, Any]:
 
 
 # =========================================================
-# Agent-based intent detection (single call for all triggers)
+# Agent-based intent detection  (single call for all triggers)
 # =========================================================
 
 def should_expand_snippets(text: str, triggers: List[str]) -> List[str]:
-    """Ask the agent once which triggers, if any, are being requested."""
+    """One agent call to detect all intended triggers at once."""
+    if not triggers:
+        return []
+
     agent = Agent(
         model="gpt-5",
         name="whispr_snippet_detector",
         system_prompt=(
             "You are a snippet intent detector for a voice transcription app. "
             "Given transcribed speech and a list of snippet triggers, "
-            "return ONLY a JSON array of triggers the user is requesting to expand or insert. "
-            "Only include a trigger if the user clearly intends to use that snippet. "
-            "Return an empty array [] if none apply. "
-            "No explanation, no markdown, just the raw JSON array."
-        )
+            "return ONLY a JSON array of triggers the user is requesting. "
+            "Only include a trigger if the user clearly intends to use it. "
+            "Return [] if none apply. "
+            "No explanation, no markdown — just the raw JSON array."
+        ),
     )
 
     result = agent.input(
         f"Transcribed text: {text}\n"
         f"Available triggers: {json.dumps(triggers)}\n"
-        f"Which triggers is the user requesting? Reply with JSON array only."
+        "Which triggers is the user requesting? Reply with JSON array only."
     )
 
     try:
@@ -174,62 +170,57 @@ def should_expand_snippets(text: str, triggers: List[str]) -> List[str]:
 # =========================================================
 
 def handle_dynamic_trigger(trigger: str, text: str) -> str:
-    """Handle triggers that require dynamic data rather than static expansion."""
-    trigger_lower = trigger.lower()
-
-    if trigger_lower == "calendar":
+    """Handle triggers that need live data instead of a static string."""
+    if trigger.lower() == "calendar":
         try:
             from gcalendar import get_schedule, extract_calendar_intent
-            intent          = extract_calendar_intent(text)
-            date            = intent.get("date", "today")
-            calendar_filter = intent.get("calendar", "all")
-            user_id         = getpass.getuser()
-            return get_schedule(date=date, user_id=user_id, calendar_filter=calendar_filter)
+            intent   = extract_calendar_intent(text)
+            date     = intent.get("date", "today")
+            cal_filt = intent.get("calendar", "all")
+            user_id  = getpass.getuser()
+            return get_schedule(date=date, user_id=user_id, calendar_filter=cal_filt)
         except Exception as e:
-            return f"Could not fetch calendar: {str(e)}"
+            return f"Could not fetch calendar: {e}"
 
     return text
 
 
 # =========================================================
-# Expansion logic
+# Expansion
 # =========================================================
 
 def apply_snippets(text: str) -> str:
-    """Expand snippet triggers in the text using agent-based intent detection.
+    """Detect intent and expand the first matching trigger.
 
-    Makes a single agent call to detect which triggers, if any, the user
-    is requesting. Dynamic triggers (like calendar) fetch live data.
-    Static triggers expand to their stored text.
+    Uses a single agent call for all triggers regardless of how many
+    snippets are defined — no per-snippet round trips.
     """
     if not text or not text.strip():
         return text
 
-    data = load_snippets()
-
+    data     = load_snippets()
     snippets = {
         item["trigger"]: item["expansion"]
         for item in data.get("snippets", [])
         if item.get("enabled", True)
-        and str(item.get("trigger", "")).strip()
+        and str(item.get("trigger",   "")).strip()
         and str(item.get("expansion", "")).strip()
     }
 
     if not snippets:
         return text
 
-    matched_triggers = should_expand_snippets(text, list(snippets.keys()))
+    matched = should_expand_snippets(text, list(snippets.keys()))
 
-    result = text
-    for trigger in matched_triggers:
+    for trigger in matched:
         if trigger in snippets:
-            if trigger.lower() in DYNAMIC_TRIGGERS:
-                result = handle_dynamic_trigger(trigger, text)
-            else:
-                result = snippets[trigger]
-            break
+            return (
+                handle_dynamic_trigger(trigger, text)
+                if trigger.lower() in DYNAMIC_TRIGGERS
+                else snippets[trigger]
+            )
 
-    return result
+    return text
 
 
 # =========================================================
@@ -246,25 +237,21 @@ if __name__ == "__main__":
 
     try:
         if command == "list":
-            result = list_all()
-            print(json.dumps(result, ensure_ascii=False))
+            print(json.dumps(list_all(), ensure_ascii=False))
 
         elif command == "add":
             trigger   = sys.argv[3] if len(sys.argv) > 3 else ""
             expansion = sys.argv[4] if len(sys.argv) > 4 else ""
-            result    = add_snippet(trigger, expansion)
-            print(json.dumps(result, ensure_ascii=False))
+            print(json.dumps(add_snippet(trigger, expansion), ensure_ascii=False))
 
         elif command == "remove":
             trigger = sys.argv[3] if len(sys.argv) > 3 else ""
-            result  = remove_snippet(trigger)
-            print(json.dumps(result, ensure_ascii=False))
+            print(json.dumps(remove_snippet(trigger), ensure_ascii=False))
 
         elif command == "toggle":
             trigger = sys.argv[3] if len(sys.argv) > 3 else ""
             enabled = sys.argv[4].lower() not in ("false", "0", "no") if len(sys.argv) > 4 else True
-            result  = toggle_snippet(trigger, enabled)
-            print(json.dumps(result, ensure_ascii=False))
+            print(json.dumps(toggle_snippet(trigger, enabled), ensure_ascii=False))
 
         elif command == "expand":
             text     = sys.argv[3] if len(sys.argv) > 3 else ""
