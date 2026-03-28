@@ -325,8 +325,19 @@ def _load_snippet_triggers() -> List[str]:
         return []
 
 
-def _extract_date_cal(text_lower: str) -> tuple[str, str]:
-    """Extract date and calendar name from text using regex."""
+def _next_weekday_date(day_name: str) -> str:
+    """Convert day name like wednesday to next YYYY-MM-DD date."""
+    from datetime import datetime as _dt, timedelta as _td
+    days = ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"]
+    today = _dt.now()
+    days_ahead = (days.index(day_name.lower()) - today.weekday()) % 7
+    if days_ahead == 0:
+        days_ahead = 7
+    return (today + _td(days=days_ahead)).strftime("%Y-%m-%d")
+
+
+def _extract_date_cal(text_lower: str) -> tuple:
+    """Extract date and calendar name. Converts day names to YYYY-MM-DD."""
     date = "today"
     if "tomorrow" in text_lower:
         date = "tomorrow"
@@ -336,10 +347,10 @@ def _extract_date_cal(text_lower: str) -> tuple[str, str]:
             text_lower
         )
         if day_match:
-            date = day_match.group(0)
+            date = _next_weekday_date(day_match.group(0))
 
     cal = "all"
-    for word in ["work", "personal", "family", "school", "uni"]:
+    for word in ["work","personal","family","school","uni","unsw","university","study","class","lecture"]:
         if word in text_lower:
             cal = word
             break
@@ -566,14 +577,18 @@ def transcribe_and_enhance_impl(
 
     try:
         if intent_type == "calendar":
-            # Zero LLM calls — direct Google Calendar API
-            from gcalendar import get_schedule
+            # Use LLM to extract date properly — handles "next Wednesday",
+            # "this Friday", "in 2 days" etc. much better than regex.
+            # The intent detection (tier1/tier2) is still regex — only the
+            # date/calendar extraction uses the LLM here.
+            from gcalendar import get_schedule, extract_calendar_intent
             import getpass
             t1 = time.perf_counter()
+            cal_intent = extract_calendar_intent(raw_text)
             final_text = get_schedule(
-                date=intent.get("date") or "today",
+                date=cal_intent.get("date") or "today",
                 user_id=getpass.getuser(),
-                calendar_filter=intent.get("calendar") or "all",
+                calendar_filter=cal_intent.get("calendar") or "all",
             )
             print(f"[pipeline] calendar fetch: {(time.perf_counter()-t1)*1000:.0f}ms", file=sys.stderr)
 
