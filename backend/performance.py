@@ -1,93 +1,67 @@
 """
-benchmark.py — Whispr component timing tests
-
-Tests the running time of each component individually.
-Does NOT require a real audio file for most tests — uses mock data
-so the benchmark can run standalone.
+performance.py — Whispr component timing tests
 
 Usage:
-    python benchmark.py                  # run all tests
-    python benchmark.py --component refine
-    python benchmark.py --component dictionary
-    python benchmark.py --component snippets
-    python benchmark.py --component calendar
-    python benchmark.py --component history
-    python benchmark.py --component dedup
-    python benchmark.py --audio path/to/file.wav   # include real transcription test
-    python benchmark.py --save           # save results to benchmark_results.json
-"""
+    python performance.py          # run all tests including audio files
+    python performance.py --save   # save results to benchmark_results.json
 
+Audio files expected in the same directory:
+    short.wav       — short clean speech
+    long.wav        — long paragraph
+    calender.wav    — calendar request ("check my schedule for tomorrow")
+    translation.wav — non-English speech for translation test
+"""
 from __future__ import annotations
 
 import argparse
 import json
-import sys
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List
+
+BASE_DIR = Path(__file__).resolve().parent
+
+# ── Audio files ───────────────────────────────────────────
+AUDIO_SHORT       = BASE_DIR / "short.wav"
+AUDIO_LONG        = BASE_DIR / "long.wav"
+AUDIO_CALENDAR    = BASE_DIR / "calendar.wav"
+AUDIO_TRANSLATION = BASE_DIR / "translation.wav"
+
 
 # =========================================================
-# Timer utility
+# Timer
 # =========================================================
-
-class Timer:
-    """Context manager that measures elapsed time in ms."""
-
-    def __init__(self, name: str):
-        self.name    = name
-        self.elapsed = 0.0
-        self._start  = 0.0
-
-    def __enter__(self):
-        self._start = time.perf_counter()
-        return self
-
-    def __exit__(self, *_):
-        self.elapsed = (time.perf_counter() - self._start) * 1000  # ms
-
 
 def run_timed(name: str, fn: Callable, *args, **kwargs) -> Dict[str, Any]:
-    """Run fn(*args, **kwargs), measure time, catch errors."""
-    print(f"  Running: {name} ...", end=" ", flush=True)
-    t = Timer(name)
+    print(f"  {name} ...", end=" ", flush=True)
+    start = time.perf_counter()
     error = None
-    result = None
-
     try:
-        with t:
-            result = fn(*args, **kwargs)
+        fn(*args, **kwargs)
         status = "PASS"
     except Exception as e:
         status = "FAIL"
         error  = str(e)
+    ms = (time.perf_counter() - start) * 1000
+    print(f"{ms:>8.1f} ms  {'✓' if status == 'PASS' else f'✗ ({error[:60]})'}")
+    return {"component": name, "status": status, "ms": round(ms, 2), "error": error}
 
-    ms = t.elapsed
-    label = f"{ms:>8.1f} ms"
 
-    if status == "PASS":
-        print(f"{label}  ✓")
-    else:
-        print(f"{label}  ✗  ({error[:80]})")
-
-    return {
-        "component": name,
-        "status":    status,
-        "ms":        round(ms, 2),
-        "error":     error,
-    }
+def skip(name: str, reason: str) -> Dict[str, Any]:
+    print(f"  {name} — SKIP ({reason})")
+    return {"component": name, "status": "SKIP", "ms": 0, "error": reason}
 
 
 # =========================================================
 # Mock data
 # =========================================================
 
-MOCK_RAW_TEXT = (
+MOCK_TEXT = (
     "um so so basically I I wanted to say that uh "
-    "the the meeting is scheduled for tomorrow at nine am "
-    "and we should uh prepare the the slides beforehand"
+    "the the meeting is scheduled for tomorrow at nine am"
 )
 
-MOCK_HISTORY_ITEMS = [
+MOCK_ITEMS = [
     {
         "ts":         int(time.time() * 1000) - i * 3600000,
         "raw_text":   f"uh so the Whispr project is coming along nicely iteration {i}",
@@ -99,289 +73,211 @@ MOCK_HISTORY_ITEMS = [
 
 
 # =========================================================
-# Individual component tests
+# Component tests (mock data)
 # =========================================================
 
-def test_storage_read_write() -> List[Dict[str, Any]]:
-    """Test JSON storage read/write speed."""
+def test_storage() -> List[Dict[str, Any]]:
     print("\n── Storage ─────────────────────────────────────────")
     from app import load_history, load_dictionary, load_profile
-
-    results = []
-    results.append(run_timed("storage: load_history",    load_history))
-    results.append(run_timed("storage: load_dictionary", load_dictionary))
-    results.append(run_timed("storage: load_profile",    load_profile))
-    return results
+    return [
+        run_timed("load_history",    load_history),
+        run_timed("load_dictionary", load_dictionary),
+        run_timed("load_profile",    load_profile),
+    ]
 
 
 def test_dictionary_corrections() -> List[Dict[str, Any]]:
-    """Test dictionary correction regex speed."""
     print("\n── Dictionary corrections ──────────────────────────")
     from app import apply_dictionary_corrections
-
-    results = []
-    results.append(run_timed(
-        "dictionary: apply_corrections (short text)",
-        apply_dictionary_corrections,
-        MOCK_RAW_TEXT,
-    ))
-    results.append(run_timed(
-        "dictionary: apply_corrections (long text)",
-        apply_dictionary_corrections,
-        MOCK_RAW_TEXT * 10,
-    ))
-    return results
+    return [
+        run_timed("apply_corrections", apply_dictionary_corrections, MOCK_TEXT),
+    ]
 
 
-def test_deduplication() -> List[Dict[str, Any]]:
-    """Test deduplication and prepare_items_for_agent speed."""
+def test_dedup() -> List[Dict[str, Any]]:
     print("\n── Token optimisation ──────────────────────────────")
-    from app import deduplicate_items, prepare_items_for_agent, get_optimal_sample_size
-
-    texts_10  = [f"The Whispr project meeting is at nine am today number {i}" for i in range(10)]
-    texts_100 = texts_10 * 10
-    texts_500 = texts_10 * 50
-
-    results = []
-    results.append(run_timed("dedup: 10 items",               deduplicate_items, texts_10))
-    results.append(run_timed("dedup: 100 items",              deduplicate_items, texts_100))
-    results.append(run_timed("dedup: 500 items",              deduplicate_items, texts_500))
-    results.append(run_timed("prepare_items_for_agent: 50",   prepare_items_for_agent, MOCK_HISTORY_ITEMS))
-    results.append(run_timed("get_optimal_sample_size: 50",   get_optimal_sample_size, MOCK_HISTORY_ITEMS))
-    results.append(run_timed("get_optimal_sample_size: 500",  get_optimal_sample_size, texts_500))
-    return results
+    from dictionary_agent import deduplicate_items, prepare_items_for_agent, get_optimal_sample_size
+    texts = [f"The Whispr project meeting is at nine am today number {i}" for i in range(50)]
+    return [
+        run_timed("deduplicate_items (50)",       deduplicate_items,       texts),
+        run_timed("prepare_items_for_agent (50)", prepare_items_for_agent, MOCK_ITEMS),
+        run_timed("get_optimal_sample_size (50)", get_optimal_sample_size, MOCK_ITEMS),
+    ]
 
 
-def test_history_helpers() -> List[Dict[str, Any]]:
-    """Test history filtering (new since last update)."""
+def test_history() -> List[Dict[str, Any]]:
     print("\n── History helpers ─────────────────────────────────")
-    from app import get_new_history_since_last_update, should_update_dictionary
+    from dictionary_agent import get_new_history_since_last_update, should_update_dictionary
+    return [
+        run_timed("should_update_dictionary",  should_update_dictionary),
+        run_timed("get_new_since_last_update", get_new_history_since_last_update),
+    ]
 
-    results = []
-    results.append(run_timed("history: should_update_dictionary", should_update_dictionary))
-    results.append(run_timed("history: get_new_since_last_update", get_new_history_since_last_update))
-    return results
 
-
-def test_ai_refine() -> List[Dict[str, Any]]:
-    """Test AI text refinement agent latency."""
-    print("\n── AI refine (network call) ────────────────────────")
+def test_refine() -> List[Dict[str, Any]]:
+    print("\n── AI refine (network) ─────────────────────────────")
     from app import ai_refine_text
-
-    results = []
-    results.append(run_timed(
-        "ai_refine: short text (no app)",
-        ai_refine_text,
-        MOCK_RAW_TEXT,
-        "",
-    ))
-    results.append(run_timed(
-        "ai_refine: short text (with app hint)",
-        ai_refine_text,
-        MOCK_RAW_TEXT,
-        "Mail",
-    ))
-    results.append(run_timed(
-        "ai_refine: long text",
-        ai_refine_text,
-        MOCK_RAW_TEXT * 3,
-        "Xcode",
-    ))
-    return results
+    return [
+        run_timed("ai_refine (mock text)", ai_refine_text, MOCK_TEXT, "Mail"),
+    ]
 
 
 def test_snippets() -> List[Dict[str, Any]]:
-    """Test snippet agent (single agent call with tools registered)."""
-    print("\n── Snippets ────────────────────────────────────────")
-    from snippets import apply_snippets, build_snippet_agent, get_calendar
-
-    # Mock snippet maps for isolated agent tests
-    static_only  = {"zoom link": "https://zoom.us/j/123456789", "my email": "test@example.com"}
-    with_calendar = {"calendar": "dynamic", "zoom link": "https://zoom.us/j/123456789"}
-
-    results = []
-
-    # Test apply_snippets end-to-end with no match expected
-    results.append(run_timed(
-        "snippets: apply_snippets (no match)",
-        apply_snippets,
-        "Let me write an email about the project deadline",
-    ))
-
-    # Test apply_snippets with a static trigger match
-    results.append(run_timed(
-        "snippets: apply_snippets (static match)",
-        apply_snippets,
-        "give me my zoom link please",
-    ))
-
-    # Test the agent build + single static expansion directly
-    results.append(run_timed(
-        "snippets: build_snippet_agent (static only)",
-        lambda: build_snippet_agent(static_only).input(
-            "can you paste my zoom link"
-        ),
-    ))
-
-    # Test agent with calendar tool registered
-    results.append(run_timed(
-        "snippets: build_snippet_agent (with calendar tool)",
-        lambda: build_snippet_agent(with_calendar).input(
-            "give me my calendar link please"
-        ),
-    ))
-
-    # Test get_calendar tool function directly (without OAuth — expects error)
-    results.append(run_timed(
-        "snippets: get_calendar tool (no token — expects error)",
-        get_calendar,
-        "today",
-        "all",
-    ))
-
-    return results
+    print("\n── Snippets (network) ──────────────────────────────")
+    from snippets import apply_snippets, get_calendar, _build_agent
+    return [
+        run_timed("apply_snippets (no match)",   apply_snippets, "Let me write an email about the deadline"),
+        run_timed("static snippet match",        lambda: _build_agent({"zoom link": "https://zoom.us/j/123"}).input("paste my zoom link")),
+        run_timed("get_calendar (no token)",     get_calendar, "today", "all"),
+    ]
 
 
-def test_dictionary_agent_update() -> List[Dict[str, Any]]:
-    """Test dictionary agent batched update with mock items."""
-    print("\n── Dictionary agent update (network call) ──────────")
+def test_dict_agent() -> List[Dict[str, Any]]:
+    print("\n── Dictionary agent update (network) ───────────────")
     from dictionary_agent import run_batched_update
-
-    small_batch  = MOCK_HISTORY_ITEMS[:5]
-    medium_batch = MOCK_HISTORY_ITEMS[:20]
-
-    results = []
-    results.append(run_timed(
-        "dict_agent: batched update (5 items)",
-        run_batched_update,
-        small_batch,
-    ))
-    results.append(run_timed(
-        "dict_agent: batched update (20 items)",
-        run_batched_update,
-        medium_batch,
-    ))
-    return results
+    return [
+        run_timed("batched update (10 items)", run_batched_update, MOCK_ITEMS[:10]),
+    ]
 
 
-def test_calendar() -> List[Dict[str, Any]]:
-    """Test calendar date extraction and schedule fetch."""
-    print("\n── Calendar (network call) ─────────────────────────")
-    from gcalendar import extract_date_from_text, extract_calendar_intent
-
-    results = []
-    results.append(run_timed(
-        "calendar: extract_date_from_text",
-        extract_date_from_text,
-        "what's my schedule for tomorrow",
-    ))
-    results.append(run_timed(
-        "calendar: extract_calendar_intent",
-        extract_calendar_intent,
-        "show my work calendar for Friday",
-    ))
-
-    # Only test get_schedule if token exists
-    import getpass
-    from gcalendar import tokens_dir, token_path
-    uid  = getpass.getuser()
-    path = token_path(uid)
-
-    if path.exists():
-        from gcalendar import get_schedule
-        results.append(run_timed(
-            "calendar: get_schedule today (all cals)",
-            get_schedule,
-            "today",
-            "Australia/Sydney",
-            uid,
-            "all",
-        ))
+def test_calendar_api() -> List[Dict[str, Any]]:
+    print("\n── Calendar API (network) ──────────────────────────")
+    from gcalendar import extract_calendar_intent, load_current_email, _token_path, get_schedule
+    results = [
+        run_timed("extract_calendar_intent", extract_calendar_intent, "show my work calendar for Friday"),
+    ]
+    email = load_current_email()
+    path  = _token_path(email) if email else None
+    if path and path.exists():
+        results.append(run_timed("get_schedule today", get_schedule, "today", "Australia/Sydney", email, "all"))
     else:
-        print(f"  Skipping get_schedule — no token found for {uid}")
-        results.append({
-            "component": "calendar: get_schedule",
-            "status":    "SKIP",
-            "ms":        0,
-            "error":     f"no token for {uid} — run get_token.py first",
-        })
-
+        results.append(skip("get_schedule", "no token — run: python gcalendar.py connect"))
     return results
 
 
-def test_transcription(audio_path: str) -> List[Dict[str, Any]]:
-    """Test real transcription pipeline end-to-end."""
-    print("\n── Transcription (real audio) ──────────────────────")
+# =========================================================
+# Audio file tests (real pipeline)
+# =========================================================
+
+def test_audio_short() -> List[Dict[str, Any]]:
+    print("\n── Audio: short.wav ────────────────────────────────")
+    if not AUDIO_SHORT.exists():
+        return [skip("short.wav pipeline", "file not found")]
     from app import transcribe_audio, transcribe_and_enhance_impl
+    return [
+        run_timed("short: transcribe only",  transcribe_audio,            str(AUDIO_SHORT)),
+        run_timed("short: full pipeline",    transcribe_and_enhance_impl, str(AUDIO_SHORT), "Mail"),
+    ]
 
-    results = []
-    results.append(run_timed(
-        "transcribe: raw audio → text",
-        transcribe_audio,
-        audio_path,
-    ))
-    results.append(run_timed(
-        "transcribe: full pipeline (transcribe+refine+dict+snippets)",
-        transcribe_and_enhance_impl,
-        audio_path,
-        "Mail",
-    ))
-    return results
+
+def test_audio_long() -> List[Dict[str, Any]]:
+    print("\n── Audio: long.wav ─────────────────────────────────")
+    if not AUDIO_LONG.exists():
+        return [skip("long.wav pipeline", "file not found")]
+    from app import transcribe_audio, transcribe_and_enhance_impl
+    return [
+        run_timed("long: transcribe only", transcribe_audio,            str(AUDIO_LONG)),
+        run_timed("long: full pipeline",   transcribe_and_enhance_impl, str(AUDIO_LONG), "Mail"),
+    ]
+
+
+def test_audio_calendar() -> List[Dict[str, Any]]:
+    print("\n── Audio: calender.wav ─────────────────────────────")
+    if not AUDIO_CALENDAR.exists():
+        return [skip("calendar.wav pipeline", "file not found")]
+    from app import transcribe_audio, transcribe_and_enhance_impl
+    # Run full pipeline — intent detection should route to calendar
+    return [
+        run_timed("calendar: transcribe only", transcribe_audio,            str(AUDIO_CALENDAR)),
+        run_timed("calendar: full pipeline",   transcribe_and_enhance_impl, str(AUDIO_CALENDAR), "Mail"),
+    ]
+
+
+def test_audio_translation() -> List[Dict[str, Any]]:
+    """Test translation pipeline — runs full pipeline with Chinese output language."""
+    print("\n── Audio: translation.wav ──────────────────────────")
+    if not AUDIO_TRANSLATION.exists():
+        return [skip("translation.wav pipeline", "file not found")]
+    from app import transcribe_audio, transcribe_and_enhance_impl
+    return [
+        run_timed("translation: transcribe only",          transcribe_audio,            str(AUDIO_TRANSLATION)),
+        run_timed("translation: pipeline → English",       transcribe_and_enhance_impl, str(AUDIO_TRANSLATION), "Mail", "English"),
+        run_timed("translation: pipeline → Chinese",       transcribe_and_enhance_impl, str(AUDIO_TRANSLATION), "Mail", "Chinese"),
+        run_timed("translation: pipeline → Spanish",       transcribe_and_enhance_impl, str(AUDIO_TRANSLATION), "Mail", "Spanish"),
+    ]
 
 
 # =========================================================
-# Summary
+# Runtime summary table
 # =========================================================
 
-def print_summary(all_results: List[Dict[str, Any]]) -> None:
-    passed = [r for r in all_results if r["status"] == "PASS"]
-    failed = [r for r in all_results if r["status"] == "FAIL"]
-    skipped = [r for r in all_results if r["status"] == "SKIP"]
+def print_summary(results: List[Dict[str, Any]]) -> None:
+    passed  = [r for r in results if r["status"] == "PASS"]
+    failed  = [r for r in results if r["status"] == "FAIL"]
+    skipped = [r for r in results if r["status"] == "SKIP"]
 
-    total_ms = sum(r["ms"] for r in passed)
-    slowest  = sorted(passed, key=lambda r: r["ms"], reverse=True)[:3]
+    network_keywords = ("refine", "snippet", "calendar", "agent", "pipeline", "schedule")
+    local   = [r for r in passed if not any(k in r["component"].lower() for k in network_keywords)]
+    network = [r for r in passed if     any(k in r["component"].lower() for k in network_keywords)]
 
-    print("\n" + "=" * 60)
-    print(f"BENCHMARK SUMMARY — {len(all_results)} components")
-    print("=" * 60)
-    print(f"  Passed:   {len(passed)}")
-    print(f"  Failed:   {len(failed)}")
-    print(f"  Skipped:  {len(skipped)}")
-    print(f"  Total:    {total_ms:,.1f} ms")
-    print()
+    col = 46
+    div = "─" * 64
 
-    if slowest:
-        print("  Slowest components:")
-        for r in slowest:
-            print(f"    {r['ms']:>8.1f} ms  {r['component']}")
+    print(f"\n{'=' * 64}")
+    print(f"  RUNTIME SUMMARY")
+    print(f"{'=' * 64}")
+    print(f"  {'Component':<{col}} {'Time':>8}")
+    print(f"  {div}")
+
+    if local:
+        print(f"  Local (no network)")
+        for r in local:
+            print(f"    {r['component']:<{col-2}} {r['ms']:>7.1f} ms")
+
+    if network:
+        print(f"  Network / pipeline")
+        for r in network:
+            print(f"    {r['component']:<{col-2}} {r['ms']:>7.1f} ms")
+
+    print(f"  {div}")
+
+    local_total   = sum(r["ms"] for r in local)
+    network_total = sum(r["ms"] for r in network)
+    grand_total   = local_total + network_total
+
+    print(f"  {'Local subtotal':<{col}} {local_total:>7.1f} ms")
+    print(f"  {'Network/pipeline subtotal':<{col}} {network_total:>7.1f} ms")
+    print(f"  {'TOTAL':<{col}} {grand_total:>7.1f} ms")
+    print(f"  {div}")
+    print(f"  Passed: {len(passed)}  Failed: {len(failed)}  Skipped: {len(skipped)}")
 
     if failed:
-        print()
-        print("  Failed components:")
+        print(f"\n  Failed:")
         for r in failed:
             print(f"    ✗ {r['component']}: {r['error']}")
 
-    print("=" * 60)
+    if network:
+        slowest = max(network, key=lambda r: r["ms"])
+        print(f"\n  Slowest: {slowest['component']} ({slowest['ms']:.1f} ms)")
+
+    print(f"{'=' * 64}")
 
 
-def save_results(all_results: List[Dict[str, Any]], path: str = "benchmark_results.json") -> None:
-    passed   = [r for r in all_results if r["status"] == "PASS"]
+def save_results(results: List[Dict[str, Any]], path: str = "benchmark_results.json") -> None:
+    passed   = [r for r in results if r["status"] == "PASS"]
     total_ms = sum(r["ms"] for r in passed)
-
-    output = {
-        "summary": {
-            "total_components": len(all_results),
-            "passed":           len(passed),
-            "failed":           len([r for r in all_results if r["status"] == "FAIL"]),
-            "skipped":          len([r for r in all_results if r["status"] == "SKIP"]),
-            "total_ms":         round(total_ms, 2),
-        },
-        "results": all_results,
-    }
-
     out = Path(path)
-    out.write_text(json.dumps(output, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"\nResults saved to {out.resolve()}")
+    out.write_text(json.dumps({
+        "summary": {
+            "total":    len(results),
+            "passed":   len(passed),
+            "failed":   len([r for r in results if r["status"] == "FAIL"]),
+            "skipped":  len([r for r in results if r["status"] == "SKIP"]),
+            "total_ms": round(total_ms, 2),
+        },
+        "results": results,
+    }, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"\nSaved to {out.resolve()}")
 
 
 # =========================================================
@@ -389,64 +285,38 @@ def save_results(all_results: List[Dict[str, Any]], path: str = "benchmark_resul
 # =========================================================
 
 COMPONENT_MAP = {
-    "storage":    test_storage_read_write,
-    "dictionary": test_dictionary_corrections,
-    "dedup":      test_deduplication,
-    "history":    test_history_helpers,
-    "refine":     test_ai_refine,
-    "snippets":   test_snippets,
-    "dict_agent": test_dictionary_agent_update,
-    "calendar":   test_calendar,
+    "storage":     test_storage,
+    "dictionary":  test_dictionary_corrections,
+    "dedup":       test_dedup,
+    "history":     test_history,
+    "refine":      test_refine,
+    "snippets":    test_snippets,
+    "dict_agent":  test_dict_agent,
+    "calendar":    test_calendar_api,
+    "short":       test_audio_short,
+    "long":        test_audio_long,
+    "audio_cal":   test_audio_calendar,
+    "translation": test_audio_translation,
 }
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Whispr component benchmark")
-    parser.add_argument(
-        "--component", "-c",
-        choices=list(COMPONENT_MAP.keys()),
-        help="Run only a specific component (default: all)",
-    )
-    parser.add_argument(
-        "--audio", "-a",
-        help="Path to a real audio file for transcription tests",
-    )
-    parser.add_argument(
-        "--save", "-s",
-        action="store_true",
-        help="Save results to benchmark_results.json",
-    )
+    parser = argparse.ArgumentParser(description="Whispr benchmark")
+    parser.add_argument("--component", "-c", choices=list(COMPONENT_MAP.keys()), help="Run one component only")
+    parser.add_argument("--save",      "-s", action="store_true", help="Save to benchmark_results.json")
     args = parser.parse_args()
 
-    print("=" * 60)
-    print("Whispr component benchmark")
-    print("=" * 60)
+    print("=" * 64)
+    print("  Whispr component benchmark")
+    print("=" * 64)
 
     all_results: List[Dict[str, Any]] = []
 
     if args.component:
-        # Run only the requested component
-        fn = COMPONENT_MAP[args.component]
-        all_results.extend(fn())
+        all_results.extend(COMPONENT_MAP[args.component]())
     else:
-        # Run all components in order
-        # Fast local tests first
-        all_results.extend(test_storage_read_write())
-        all_results.extend(test_dictionary_corrections())
-        all_results.extend(test_deduplication())
-        all_results.extend(test_history_helpers())
-
-        # Network calls
-        all_results.extend(test_ai_refine())
-        all_results.extend(test_snippets())
-        all_results.extend(test_dictionary_agent_update())
-        all_results.extend(test_calendar())
-
-    # Real audio test if path provided
-    if args.audio:
-        if Path(args.audio).exists():
-            all_results.extend(test_transcription(args.audio))
-        else:
-            print(f"\n  Warning: audio file not found: {args.audio}")
+        # Run all — mock tests first, then all four audio files
+        for fn in COMPONENT_MAP.values():
+            all_results.extend(fn())
 
     print_summary(all_results)
 
