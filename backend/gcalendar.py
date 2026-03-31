@@ -90,7 +90,7 @@ def run_oauth_flow() -> tuple[Credentials, str]:
         str(CREDENTIALS_FILE), scopes=SCOPES, redirect_uri=REDIRECT_URI,
     )
     auth_url, _ = flow.authorization_url(
-        access_type="offline", include_granted_scopes="true", prompt="consent",
+        access_type="offline", include_granted_scopes="true",
     )
 
     auth_code   = {"value": None}
