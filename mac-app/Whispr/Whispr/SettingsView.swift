@@ -117,13 +117,17 @@ struct SettingsView: View {
         .padding()
         .frame(width: 420, height: 360)
         .onAppear {
-            loadCurrentCalendarEmail()
+            // Small delay to ensure backend process is ready
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                loadCurrentCalendarEmail()
+            }
 
-            // Sync language from backend
             backendClient?.fetchLanguageFromBackend { lang in
                 if let lang = lang, Config.supportedLanguages.contains(lang) {
-                    selectedLanguage      = lang
-                    Config.targetLanguage = lang
+                    DispatchQueue.main.async {
+                        selectedLanguage      = lang
+                        Config.targetLanguage = lang
+                    }
                 }
             }
         }

@@ -387,6 +387,7 @@ final class LocalBackendClient: ObservableObject {
     /// Read the currently saved Google email from the Python tokens directory.
     func fetchCalendarEmail(completion: @escaping (String?) -> Void) {
         guard let backendScriptPath else {
+            print("[calendar] backendScriptPath is nil")
             completion(nil)
             return
         }
@@ -396,19 +397,27 @@ final class LocalBackendClient: ObservableObject {
             .appendingPathComponent("gcalendar.py")
             .path
 
-        runPythonCommand(
-            script: calendarScript,
-            arguments: ["get-email"]
-        ) { result in
-            guard case .success(let output) = result,
-                  let data = output.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let email = json["email"] as? String
-            else {
+        runPythonCommand(script: calendarScript, arguments: ["get-email"]) { result in
+            switch result {
+            case .success(let output):
+                print("[calendar] get-email output: \(output)")
+                // Parse JSON — find the line containing valid JSON
+                let email = output
+                    .components(separatedBy: .newlines)
+                    .compactMap { line -> String? in
+                        guard let data = line.data(using: .utf8),
+                              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                              let email = json["email"] as? String
+                        else { return nil }
+                        return email
+                    }
+                    .first
+                print("[calendar] parsed email: \(email ?? "nil")")
+                completion(email)
+            case .failure(let error):
+                print("[calendar] get-email error: \(error.localizedDescription)")
                 completion(nil)
-                return
             }
-            completion(email)
         }
     }
 
