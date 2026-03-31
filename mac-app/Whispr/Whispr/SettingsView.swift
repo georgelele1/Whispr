@@ -78,18 +78,28 @@ struct SettingsView: View {
                         .foregroundColor(calendarEmail == "Not connected" ? .secondary : .primary)
                 }
 
-                if calendarEmail == "Not connected" {
+                if calendarEmail == "Not connected" || calendarEmail == "Connecting..." {
                     Button("Connect Google Calendar") {
                         connectCalendar()
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
+                    .disabled(calendarEmail == "Connecting...")
                 } else {
-                    Button("Switch account") {
-                        connectCalendar()
+                    HStack(spacing: 8) {
+                        Button("Switch account") {
+                            connectCalendar()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+
+                        Button("Disconnect") {
+                            disconnectCalendar()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .foregroundColor(.red)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
                 }
             }
 
@@ -126,15 +136,26 @@ struct SettingsView: View {
     /// Read the saved Google email from the Python tokens directory.
     private func loadCurrentCalendarEmail() {
         backendClient?.fetchCalendarEmail { email in
-            calendarEmail = email ?? "Not connected"
+            DispatchQueue.main.async {
+                calendarEmail = email ?? "Not connected"
+            }
         }
     }
 
-    /// Trigger the Python OAuth flow to connect / switch Google account.
     private func connectCalendar() {
-        calendarEmail = "Connecting..."
+        DispatchQueue.main.async { calendarEmail = "Connecting..." }
         backendClient?.connectGoogleCalendar { email in
-            calendarEmail = email ?? "Not connected"
+            DispatchQueue.main.async {
+                calendarEmail = email ?? "Not connected"
+            }
+        }
+    }
+
+    private func disconnectCalendar() {
+        backendClient?.disconnectGoogleCalendar { _ in
+            DispatchQueue.main.async {
+                calendarEmail = "Not connected"
+            }
         }
     }
 }

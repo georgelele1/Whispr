@@ -415,29 +415,26 @@ final class LocalBackendClient: ObservableObject {
     /// Trigger the Python OAuth flow to connect or switch Google account.
     /// Opens a browser window for the user to approve access.
     func connectGoogleCalendar(completion: @escaping (String?) -> Void) {
-        guard let backendScriptPath else {
-            completion(nil)
-            return
-        }
-
+        guard let backendScriptPath else { completion(nil); return }
         let calendarScript = URL(fileURLWithPath: backendScriptPath)
-            .deletingLastPathComponent()
-            .appendingPathComponent("gcalendar.py")
-            .path
+            .deletingLastPathComponent().appendingPathComponent("gcalendar.py").path
 
-        runPythonCommand(
-            script: calendarScript,
-            arguments: ["connect"]
-        ) { result in
-            guard case .success(let output) = result,
-                  let data = output.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let email = json["email"] as? String
-            else {
-                completion(nil)
-                return
+        runPythonCommand(script: calendarScript, arguments: ["connect"]) { [weak self] result in
+            guard let self else { return }
+            // OAuth process finished — now read the saved email from disk
+            // (more reliable than parsing the connect output which may contain stderr noise)
+            self.fetchCalendarEmail { email in
+                completion(email)
             }
-            completion(email)
+        }
+    }
+
+    func disconnectGoogleCalendar(completion: @escaping (Bool) -> Void) {
+        guard let backendScriptPath else { completion(false); return }
+        let calendarScript = URL(fileURLWithPath: backendScriptPath)
+            .deletingLastPathComponent().appendingPathComponent("gcalendar.py").path
+        runPythonCommand(script: calendarScript, arguments: ["disconnect"]) { result in
+            if case .success = result { completion(true) } else { completion(false) }
         }
     }
 }
