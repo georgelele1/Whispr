@@ -405,5 +405,14 @@ if __name__ == "__main__":
         except Exception as e:
             print(json.dumps({"ok": False, "email": None, "error": str(e)}, ensure_ascii=False))
 
+    elif command == "disconnect":
+        email = load_current_email()
+        if email:
+            _token_path(email).unlink(missing_ok=True)
+            _current_email_file().unlink(missing_ok=True)
+            print(json.dumps({"ok": True, "disconnected": email}, ensure_ascii=False))
+        else:
+            print(json.dumps({"ok": False, "error": "no account connected"}, ensure_ascii=False))
+
     else:
         print(get_schedule(date=command))
