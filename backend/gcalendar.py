@@ -381,7 +381,7 @@ def extract_calendar_intent(text: str) -> dict:
 
 def extract_search_intent(text: str) -> dict:
     """Extract search query and calendar filter from speech.
-
+    
     Returns {"query": "exam", "calendar": "all|name"}.
     """
     agent = Agent(
