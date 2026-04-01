@@ -15,15 +15,10 @@ CLI:
 """
 from __future__ import annotations
 
-import os
-
-# Suppress connectonion [env] output to stdout — must be set before any imports
-os.environ["CO_QUIET"] = "1"
-os.environ["CO_EVALS"] = "0"
-os.environ["CO_LOGS"]  = "0"
-
 import getpass
+import io as _io
 import json
+import os
 import sys
 import threading
 import webbrowser
@@ -39,7 +34,13 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 
-from connectonion import Agent
+# Swallow [env] line connectonion prints on import
+_real_stdout = sys.stdout
+sys.stdout   = _io.StringIO()
+try:
+    from connectonion import Agent
+finally:
+    sys.stdout = _real_stdout
 
 APP_NAME         = "Whispr"
 SCOPES           = [
@@ -167,7 +168,6 @@ def get_credentials(user_id: str | None = None) -> tuple[Credentials, str]:
     """
     email = user_id or load_current_email()
 
-    # 1 & 2 — check in-memory cache first
     if email and email in _creds_cache:
         cached = _creds_cache[email]
         if cached.valid:
@@ -179,9 +179,8 @@ def get_credentials(user_id: str | None = None) -> tuple[Credentials, str]:
                 _creds_cache[email] = cached
                 return cached, email
             except Exception:
-                pass  # fall through to disk
+                pass
 
-    # 3 & 4 — load from disk
     if email:
         path = _token_path(email)
         if path.exists():
@@ -194,9 +193,8 @@ def get_credentials(user_id: str | None = None) -> tuple[Credentials, str]:
                     _creds_cache[email] = creds
                     return creds, email
             except Exception:
-                pass  # token file corrupt — fall through to OAuth
+                pass
 
-    # 5 — no valid token anywhere, trigger OAuth once
     print("[calendar] no valid token found — starting OAuth flow", file=sys.stderr)
     creds, email = run_oauth_flow()
     _creds_cache[email] = creds
@@ -208,7 +206,6 @@ def get_credentials(user_id: str | None = None) -> tuple[Credentials, str]:
 # =========================================================
 
 def _get_calendars(service: Any, calendar_filter: str) -> list:
-    """Return calendar list, optionally filtered by name substring."""
     all_cals = service.calendarList().list().execute().get("items", [])
     if calendar_filter == "all":
         return all_cals
@@ -220,7 +217,6 @@ def _sort_events(events: list) -> list:
 
 
 def _fmt_event(event: dict) -> str:
-    """Format event as '  - HH:MM AM: Title [Calendar]'."""
     raw     = event["start"].get("dateTime", event["start"].get("date", ""))
     summary = event.get("summary", "Untitled event")
     cal     = event.get("_cal", "")
@@ -232,7 +228,6 @@ def _fmt_event(event: dict) -> str:
 
 
 def _fmt_event_with_date(event: dict) -> str:
-    """Format event as '  - Mon DD Mon HH:MM AM: Title [Calendar]'."""
     raw     = event["start"].get("dateTime", event["start"].get("date", ""))
     summary = event.get("summary", "Untitled event")
     cal     = event.get("_cal", "")
@@ -317,8 +312,6 @@ def search_events(
     max_results: int = 10,
 ) -> str:
     """Search for events matching a keyword across the next 365 days.
-
-    Uses Google Calendar's built-in full-text search (title + description).
 
     Args:
         query:           Search term e.g. 'exam', 'COMP9900', 'dentist'.
@@ -420,7 +413,6 @@ if __name__ == "__main__":
 
     elif command == "connect":
         try:
-            # If a valid token already exists, return it without re-authing
             existing = load_current_email()
             if existing:
                 path = _token_path(existing)
@@ -434,7 +426,6 @@ if __name__ == "__main__":
                         path.write_text(creds.to_json(), encoding="utf-8")
                         print(json.dumps({"ok": True, "email": existing}, ensure_ascii=False))
                         sys.exit(0)
-            # No valid token — run OAuth flow
             _, email = run_oauth_flow()
             print(json.dumps({"ok": True, "email": email}, ensure_ascii=False))
         except Exception as e:
@@ -445,7 +436,7 @@ if __name__ == "__main__":
         if email:
             _token_path(email).unlink(missing_ok=True)
             _current_email_file().unlink(missing_ok=True)
-            _creds_cache.pop(email, None)  # clear in-memory cache too
+            _creds_cache.pop(email, None)
             print(json.dumps({"ok": True, "email": None, "disconnected": email}, ensure_ascii=False))
         else:
             print(json.dumps({"ok": False, "email": None, "error": "no account connected"}, ensure_ascii=False))
