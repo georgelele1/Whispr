@@ -233,8 +233,10 @@ def detect_intent(raw_text: str, snippet_triggers: List[str]) -> Dict[str, Any]:
             "Classify voice input into exactly one type: text, calendar, search, or snippet.\n"
             "calendar = user wants to SEE their schedule for a date.\n"
             "search   = user wants to FIND a specific event by name (exam, deadline, dentist etc).\n"
-            "snippet  = user requests a known shortcut by name.\n"
-            "text     = normal dictation.\n"
+            "snippet  = user EXPLICITLY requests a shortcut using action words like "
+            "'give me', 'insert', 'paste', 'use', 'open', 'show me'. "
+            "NOT snippet if the trigger appears naturally mid-sentence.\n"
+            "text     = everything else, including sentences that mention shortcut keywords naturally.\n"
             + triggers_hint +
             'Reply ONLY with JSON: {"type":"...","trigger":null,"date":"today|tomorrow|YYYY-MM-DD|null","calendar":"name|all|null"}'
         ),
