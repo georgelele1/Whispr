@@ -15,9 +15,15 @@ CLI:
 """
 from __future__ import annotations
 
+import os
+
+# Suppress connectonion [env] output to stdout — must be set before any imports
+os.environ["CO_QUIET"] = "1"
+os.environ["CO_EVALS"] = "0"
+os.environ["CO_LOGS"]  = "0"
+
 import getpass
 import json
-import os
 import sys
 import threading
 import webbrowser
@@ -147,37 +153,51 @@ _creds_cache: dict[str, Credentials] = {}
 
 
 def get_credentials(user_id: str | None = None) -> tuple[Credentials, str]:
-    """Return (valid_credentials, google_email), triggering OAuth only on first run.
+    """Return (valid_credentials, google_email).
+
+    Only triggers OAuth browser flow if NO valid token exists anywhere.
+    Once a token is saved it persists until explicitly disconnected.
 
     Priority:
         1. In-memory cache (valid)
-        2. In-memory cache (expired) → refresh in place
-        3. Token file on disk
-        4. OAuth browser flow (first time only)
+        2. In-memory cache (expired + refresh_token) → silent refresh
+        3. Token file on disk (valid)
+        4. Token file on disk (expired + refresh_token) → silent refresh
+        5. OAuth browser flow — only if no token found at all
     """
     email = user_id or load_current_email()
 
+    # 1 & 2 — check in-memory cache first
     if email and email in _creds_cache:
         cached = _creds_cache[email]
         if cached.valid:
             return cached, email
         if cached.expired and cached.refresh_token:
-            cached.refresh(Request())
-            _token_path(email).write_text(cached.to_json(), encoding="utf-8")
-            _creds_cache[email] = cached
-            return cached, email
+            try:
+                cached.refresh(Request())
+                _token_path(email).write_text(cached.to_json(), encoding="utf-8")
+                _creds_cache[email] = cached
+                return cached, email
+            except Exception:
+                pass  # fall through to disk
 
+    # 3 & 4 — load from disk
     if email:
         path = _token_path(email)
         if path.exists():
-            creds = Credentials.from_authorized_user_file(str(path), SCOPES)
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-                path.write_text(creds.to_json(), encoding="utf-8")
-            if creds and creds.valid:
-                _creds_cache[email] = creds
-                return creds, email
+            try:
+                creds = Credentials.from_authorized_user_file(str(path), SCOPES)
+                if creds and creds.expired and creds.refresh_token:
+                    creds.refresh(Request())
+                    path.write_text(creds.to_json(), encoding="utf-8")
+                if creds and creds.valid:
+                    _creds_cache[email] = creds
+                    return creds, email
+            except Exception:
+                pass  # token file corrupt — fall through to OAuth
 
+    # 5 — no valid token anywhere, trigger OAuth once
+    print("[calendar] no valid token found — starting OAuth flow", file=sys.stderr)
     creds, email = run_oauth_flow()
     _creds_cache[email] = creds
     return creds, email
@@ -400,6 +420,21 @@ if __name__ == "__main__":
 
     elif command == "connect":
         try:
+            # If a valid token already exists, return it without re-authing
+            existing = load_current_email()
+            if existing:
+                path = _token_path(existing)
+                if path.exists():
+                    creds = Credentials.from_authorized_user_file(str(path), SCOPES)
+                    if creds and creds.valid:
+                        print(json.dumps({"ok": True, "email": existing}, ensure_ascii=False))
+                        sys.exit(0)
+                    if creds and creds.expired and creds.refresh_token:
+                        creds.refresh(Request())
+                        path.write_text(creds.to_json(), encoding="utf-8")
+                        print(json.dumps({"ok": True, "email": existing}, ensure_ascii=False))
+                        sys.exit(0)
+            # No valid token — run OAuth flow
             _, email = run_oauth_flow()
             print(json.dumps({"ok": True, "email": email}, ensure_ascii=False))
         except Exception as e:
@@ -410,9 +445,10 @@ if __name__ == "__main__":
         if email:
             _token_path(email).unlink(missing_ok=True)
             _current_email_file().unlink(missing_ok=True)
-            print(json.dumps({"ok": True, "disconnected": email}, ensure_ascii=False))
+            _creds_cache.pop(email, None)  # clear in-memory cache too
+            print(json.dumps({"ok": True, "email": None, "disconnected": email}, ensure_ascii=False))
         else:
-            print(json.dumps({"ok": False, "error": "no account connected"}, ensure_ascii=False))
+            print(json.dumps({"ok": False, "email": None, "error": "no account connected"}, ensure_ascii=False))
 
     else:
         print(get_schedule(date=command))
