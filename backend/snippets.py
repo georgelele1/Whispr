@@ -24,10 +24,18 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
-from connectonion import Agent
-
-# Shared helpers from app — avoids duplicating app_support_dir / storage_path
+# Shared helpers from app
 from app import app_support_dir, register_tool
+
+# Swallow [env] line connectonion prints on import
+import io as _io
+import sys as _sys
+_real_stdout = _sys.stdout
+_sys.stdout  = _io.StringIO()
+try:
+    from connectonion import Agent
+finally:
+    _sys.stdout = _real_stdout
 
 SNIPPETS_FILE    = "snippets.json"
 DYNAMIC_TRIGGERS = {"calendar"}
