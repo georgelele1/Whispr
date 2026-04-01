@@ -8,12 +8,16 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
-from connectonion.address import load
-from connectonion import Agent, host, transcribe
-
-# ── Suppress connectonion eval/log files in production ───
-os.environ["CO_EVALS"] = "0"
-os.environ["CO_LOGS"]  = "0"
+# Swallow [env] line connectonion prints to stdout on import
+import io as _io
+_real_stdout, _real_stderr = sys.stdout, sys.stderr
+sys.stdout = sys.stderr = _io.StringIO()
+try:
+    from connectonion.address import load
+    from connectonion import Agent, host, transcribe
+finally:
+    sys.stdout = _real_stdout
+    sys.stderr = _real_stderr
 
 BASE_DIR = Path(__file__).resolve().parent
 CO_DIR   = BASE_DIR / ".co"
@@ -29,14 +33,12 @@ SUPPORTED_LANGUAGES = [
 ]
 DEFAULT_LANGUAGE = "English"
 
-# ── Self-correction: off by default (too slow for real-time) ─
 ENABLE_SELF_CORRECT = False
 SCORE_THRESHOLD     = 70
 MAX_RETRIES         = 2
 
-# ── Calendar intent regexes ───────────────────────────────
-
-# Tier 1: calendar words present but clearly NOT a fetch request
+# ── Intent deny regex (0ms) ───────────────────────────────
+# Calendar words present but clearly NOT a fetch request
 _CALENDAR_DENY = re.compile(
     r"\b("
     r"(my |the )?(calendar|schedule) is (full|busy|packed|crazy|hectic|clear|empty|free)"
@@ -45,41 +47,6 @@ _CALENDAR_DENY = re.compile(
     r"|cancel(led)? (the |my )?(meeting|appointment|event)"
     r"|reschedule|missed (the |my )?(meeting|appointment)"
     r")\b",
-    re.IGNORECASE,
-)
-
-# Tier 2: unambiguously requesting a calendar fetch
-_CALENDAR_ALLOW = re.compile(
-    r"\b("
-    r"(show|check|see|get|what.?s|give me|tell me|look at|open|pull up|read)"
-    r"\s+(me\s+)?(my\s+)?(schedule|calendar|events?|agenda|appointments?|meetings?)"
-    r"|what.?s\s+(on|happening)\s+(today|tomorrow|this week|next week|monday|tuesday|wednesday|thursday|friday)"
-    r"|am\s+i\s+(free|available|busy)\s+(today|tomorrow|on|this|next)"
-    r"|do\s+i\s+have\s+(anything|something|a meeting|an appointment)"
-    r"|what\s+time\s+is\s+my|when\s+is\s+my\s+next"
-    r")\b",
-    re.IGNORECASE,
-)
-
-# Tier 3 gate: calendar keywords that might be ambiguous
-_CALENDAR_KEYWORDS = re.compile(
-    r"\b(schedule|calendar|events?|meeting|appointment|agenda|free|available|busy)\b",
-    re.IGNORECASE,
-)
-
-# Snippet: action verb + known trigger word
-_SNIPPET_ALLOW = re.compile(
-    r"^\s*(give me|insert|paste|use|add|put|show me|open|pull up)",
-    re.IGNORECASE,
-)
-
-# Search: user wants to find a specific event by keyword
-_CALENDAR_SEARCH = re.compile(
-    r"("
-    r"(search|find|look for|when is|when.?s|what date is|what day is)"
-    r"\s+(my\s+)?(.*?)\s*(in|on|at)?\s*(calendar|schedule)?"
-    r"|when is (my\s+)?(exam|test|assignment|deadline|appointment|class|lecture|meeting)"
-    r")",
     re.IGNORECASE,
 )
 
@@ -130,7 +97,7 @@ def save_store(filename: str, data: Any) -> None:
 
 
 # =========================================================
-# Profile / history / dictionary accessors
+# Profile / history / dictionary
 # =========================================================
 
 def load_profile() -> Dict[str, Any]:
@@ -202,11 +169,9 @@ def register_tool(agent: Agent, fn: Callable[..., Any]) -> None:
 # =========================================================
 
 def get_dictionary_terms() -> Dict[str, Any]:
-    """Tool: return approved dictionary terms so the refiner agent
-    can apply corrections in context during refinement."""
+    """Tool: return approved dictionary terms for the refiner agent."""
     terms = [
-        {"phrase": str(item.get("phrase", "")).strip(),
-         "aliases": item.get("aliases", [])}
+        {"phrase": str(item.get("phrase", "")).strip(), "aliases": item.get("aliases", [])}
         for item in load_dictionary().get("terms", [])
         if item.get("approved", True) and str(item.get("phrase", "")).strip()
     ]
@@ -214,7 +179,7 @@ def get_dictionary_terms() -> Dict[str, Any]:
 
 
 def apply_dictionary_corrections(text: str) -> str:
-    """Fallback regex corrections — used only when agent is skipped (short clean text)."""
+    """Fallback regex corrections — used when agent is skipped."""
     if not text.strip():
         return text
     result = text
@@ -234,13 +199,11 @@ def apply_dictionary_corrections(text: str) -> str:
 
 
 # =========================================================
-# Intent detection — 3-tier hybrid
+# Intent detection
 #
-#  Tier 1 (0ms)   hard DENY regex  — calendar words but NOT a request
-#  Tier 2 (0ms)   hard ALLOW regex — unambiguous fetch request
-#  Tier 3 (~1.5s) LLM fallback     — ambiguous calendar context only
+# Tier 1 (0ms):   Hard deny regex — obvious non-calendar text
+# Tier 2 (~7s):   Agent — classifies text/calendar/search/snippet
 # =========================================================
-
 
 def _load_snippet_triggers() -> List[str]:
     try:
@@ -255,7 +218,6 @@ def _load_snippet_triggers() -> List[str]:
 
 
 def detect_intent(raw_text: str, snippet_triggers: List[str]) -> Dict[str, Any]:
-    """Detect intent: hard deny regex (0ms) then agent (~1.5s)."""
     if _CALENDAR_DENY.search(raw_text):
         print("[intent] deny → text", file=sys.stderr)
         return {"type": "text", "trigger": None, "date": None, "calendar": None}
@@ -315,8 +277,12 @@ def ai_refine_text(
         if app_name.strip() and app_name.strip() != "unknown"
         else ""
     )
+    translate_step = f"4. Translate to {lang} if needed." if lang != "English" else ""
 
-    translate_step = f"5. Translate to {lang} if needed." if lang != "English" else ""
+    # Only inject dictionary tool if terms exist — skips extra LLM call when empty
+    has_dictionary = bool(load_dictionary().get("terms"))
+    dict_step      = "1. Call get_dictionary_terms and apply corrections. " if has_dictionary else ""
+    step_offset    = 2 if has_dictionary else 1
 
     agent = Agent(
         model="gpt-5",
@@ -325,16 +291,15 @@ def ai_refine_text(
             "You are a voice transcription cleaner. "
             f"{app_hint}"
             f"Output language: {lang}. "
-            "Steps: "
-            "1. Call get_dictionary_terms to get the user's personal dictionary. "
-            "2. Remove stutters, false starts, filler words (uh, um, like), repeated words. "
-            "3. Apply dictionary corrections: replace any alias with the correct phrase. "
-            "4. Fix punctuation and capitalisation. "
+            f"{dict_step}"
+            f"{step_offset}. Remove stutters, false starts, filler words (uh, um, like), repeated words. "
+            f"{step_offset+1}. Fix punctuation and capitalisation. "
             f"{translate_step} "
             "Output ONLY the final cleaned text."
         ),
     )
-    register_tool(agent, get_dictionary_terms)
+    if has_dictionary:
+        register_tool(agent, get_dictionary_terms)
 
     return _clean(agent.input(text))
 
@@ -356,10 +321,10 @@ def self_correct_text(
     except ImportError:
         return refined
 
-    current = refined
-    best    = refined
+    current    = refined
+    best       = refined
     best_score = 0
-    lang = target_language.strip() or get_target_language()
+    lang       = target_language.strip() or get_target_language()
 
     for attempt in range(MAX_RETRIES):
         results = run_refinement_eval([{
@@ -367,15 +332,12 @@ def self_correct_text(
         }], verbose=False)
         if not results:
             break
-
-        score  = results[0]["score"]
-        reason = results[0]["reason"]
+        score, reason = results[0]["score"], results[0]["reason"]
         if score > best_score:
             best_score, best = score, current
         print(f"[self-correct] attempt {attempt+1} score={score}/100", file=sys.stderr)
         if score >= SCORE_THRESHOLD:
             break
-
         current = _clean(Agent(
             model="gpt-5", name="whispr_self_corrector",
             system_prompt=f"Fix issues. Output ONLY corrected {lang} text.",
@@ -389,11 +351,22 @@ def self_correct_text(
 # =========================================================
 
 def transcribe_audio(audio_path: str) -> str:
-    return str(transcribe(audio_path)).strip()
+    """Transcribe audio and strip connectonion wrapper preamble."""
+    raw = str(transcribe(audio_path)).strip()
+    raw = re.sub(
+        r"^(sure,?\s+)?(here\s+is\s+the\s+transcription|transcription)[^:]*:\s*",
+        "", raw, flags=re.IGNORECASE | re.DOTALL
+    ).strip()
+    return raw
 
 
 # =========================================================
 # Core pipeline
+#
+# Agent calls per request:
+#   text:              intent (~7s) + refine (~8s) = ~15s
+#   calendar/search:   intent (~7s) + API (~3s)    = ~10s
+#   snippet:           intent (~7s) + local (0ms)  = ~7s
 # =========================================================
 
 def transcribe_and_enhance_impl(
@@ -410,21 +383,23 @@ def transcribe_and_enhance_impl(
 
     # 1. Transcribe
     raw_text = transcribe_audio(audio_path)
-    print(f"[pipeline] transcribe {(time.perf_counter()-t0)*1000:.0f}ms  {raw_text[:60]!r}", file=sys.stderr)
+    t1 = time.perf_counter()
+    print(f"[pipeline] transcribe {(t1-t0)*1000:.0f}ms  {raw_text[:60]!r}", file=sys.stderr)
 
     if not raw_text.strip():
         return {"ok": False, "error": "transcription returned empty", "ts": now_ms()}
 
-    effective_app = app_name.strip() or "unknown"
-
-    # 2. Detect intent (regex first, LLM only if ambiguous)
+    effective_app    = app_name.strip() or "unknown"
     snippet_triggers = _load_snippet_triggers()
-    intent      = detect_intent(raw_text, snippet_triggers)
-    intent_type = intent.get("type", "text")
+    final_text       = raw_text
 
-    # 3. Route
-    final_text = raw_text
     try:
+        # 2. Detect intent
+        intent      = detect_intent(raw_text, snippet_triggers)
+        intent_type = intent.get("type", "text")
+        print(f"[pipeline] intent={intent_type} {(time.perf_counter()-t1)*1000:.0f}ms", file=sys.stderr)
+
+        # 3. Route
         if intent_type == "search":
             from gcalendar import search_events, extract_search_intent
             import getpass
@@ -448,7 +423,7 @@ def transcribe_and_enhance_impl(
         elif intent_type == "snippet":
             trigger = intent.get("trigger")
             try:
-                from snippets import load_snippets, handle_dynamic_trigger, DYNAMIC_TRIGGERS
+                from snippets import load_snippets, DYNAMIC_TRIGGERS, handle_dynamic_trigger
                 snippets = {
                     item["trigger"]: item["expansion"]
                     for item in load_snippets().get("snippets", [])
@@ -461,12 +436,11 @@ def transcribe_and_enhance_impl(
                         else snippets[trigger]
                     )
                 else:
-                    intent_type = "text"  # fallthrough
+                    intent_type = "text"
             except Exception:
                 intent_type = "text"
 
         if intent_type == "text":
-            # Agent calls get_dictionary_terms tool internally during refinement
             refined    = ai_refine_text(raw_text, effective_app, target_language)
             final_text = self_correct_text(raw_text, refined, effective_app, target_language)
 
@@ -554,7 +528,6 @@ if __name__ == "__main__":
 
     command = sys.argv[2]
 
-    # ── transcribe ────────────────────────────────────────
     if command == "transcribe":
         audio_path      = sys.argv[3] if len(sys.argv) > 3 else ""
         app_name        = sys.argv[4] if len(sys.argv) > 4 else "unknown"
@@ -567,7 +540,6 @@ if __name__ == "__main__":
             print(f"ERROR: {e}", file=sys.stderr)
             _exit_json({"output": ""}, 1)
 
-    # ── calendar ──────────────────────────────────────────
     elif command == "calendar":
         import getpass
         text    = sys.argv[3] if len(sys.argv) > 3 else "today"
@@ -584,22 +556,18 @@ if __name__ == "__main__":
             print(f"ERROR: {e}", file=sys.stderr)
             _exit_json({"output": ""}, 1)
 
-    # ── set-language ──────────────────────────────────────
     elif command == "set-language":
         language = sys.argv[3] if len(sys.argv) > 3 else ""
         ok = set_target_language(language)
         _exit_json({
-            "ok": ok,
-            "language": language,
+            "ok": ok, "language": language,
             "error": f"unsupported: {language}" if not ok else None,
             "supported": SUPPORTED_LANGUAGES,
         }, 0 if ok else 1)
 
-    # ── get-language ──────────────────────────────────────
     elif command == "get-language":
         _exit_json({"ok": True, "language": get_target_language(), "supported": SUPPORTED_LANGUAGES})
 
-    # ── legacy: argv[2] is audio path ────────────────────
     else:
         audio_path      = sys.argv[2]
         app_name        = sys.argv[3] if len(sys.argv) > 3 else "unknown"
