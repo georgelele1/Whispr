@@ -516,15 +516,45 @@ final class LocalBackendClient: ObservableObject {
         guard let script = dictionaryAgentPath else { completion([]); return }
         runPythonCommand(script: script, arguments: ["cli", "list"]) { result in
             guard case .success(let output) = result else { completion([]); return }
+
+            // Helper to extract terms from any known JSON structure
+            func extractTerms(_ json: [String: Any]) -> [[String: Any]]? {
+                // {"terms": [...]}
+                if let terms = json["terms"] as? [[String: Any]] { return terms }
+                // {"output": {"terms": [...]}}
+                if let out   = json["output"] as? [String: Any],
+                   let terms = out["terms"]   as? [[String: Any]] { return terms }
+                // {"output": {"dictionary": {"terms": [...]}}}
+                if let out   = json["output"]      as? [String: Any],
+                   let dict  = out["dictionary"]   as? [String: Any],
+                   let terms = dict["terms"]       as? [[String: Any]] { return terms }
+                // {"dictionary": {"terms": [...]}}
+                if let dict  = json["dictionary"]  as? [String: Any],
+                   let terms = dict["terms"]       as? [[String: Any]] { return terms }
+                return nil
+            }
+
+            // Try single-line JSON first (each line is a complete JSON object)
             for line in output.components(separatedBy: .newlines) {
-                guard let data = line.data(using: .utf8),
+                let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard trimmed.hasPrefix("{"),
+                      let data = trimmed.data(using: .utf8),
                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let dict = json["output"] as? [String: Any],
-                      let terms = dict["terms"] as? [[String: Any]]
+                      let terms = extractTerms(json)
                 else { continue }
                 completion(terms)
                 return
             }
+
+            // Try full output as multi-line JSON (pretty-printed)
+            let fullOutput = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let data  = fullOutput.data(using: .utf8),
+               let json  = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let terms = extractTerms(json) {
+                completion(terms)
+                return
+            }
+
             completion([])
         }
     }
