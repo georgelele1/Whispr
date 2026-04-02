@@ -528,18 +528,18 @@ def transcribe_and_enhance_impl(
         elif intent_type == "snippet":
             trigger = intent.get("trigger")
             try:
-                from snippets import load_snippets, DYNAMIC_TRIGGERS, handle_dynamic_trigger
+                from snippets import load_snippets, DYNAMIC_TRIGGERS, get_calendar
                 snippets = {
                     item["trigger"]: item["expansion"]
                     for item in load_snippets().get("snippets", [])
                     if item.get("enabled", True)
                 }
                 if trigger and trigger in snippets:
-                    final_text = (
-                        handle_dynamic_trigger(trigger, raw_text)
-                        if trigger.lower() in DYNAMIC_TRIGGERS
-                        else snippets[trigger]
-                    )
+                    if trigger.lower() in DYNAMIC_TRIGGERS:
+                        # Dynamic trigger — call the tool directly
+                        final_text = get_calendar()
+                    else:
+                        final_text = snippets[trigger]
                 else:
                     intent_type = "text"
             except Exception:
@@ -687,8 +687,9 @@ if __name__ == "__main__":
                 cal = extract_calendar_intent(raw_text)
                 output = get_schedule(date=cal.get("date") or "today", user_id=getpass.getuser())
             else:
-                refined = ai_refine_text(raw_text, app_name, target_language)
-                output  = self_correct_text(raw_text, refined, app_name, target_language)
+                refined  = ai_refine_text(raw_text, app_name, target_language)
+                corrected = self_correct_text(raw_text, refined, app_name, target_language)
+                output    = apply_inline_snippets(corrected)
 
             _exit_json({"input": raw_text, "intent": intent_type, "output": output})
         except Exception as e:
