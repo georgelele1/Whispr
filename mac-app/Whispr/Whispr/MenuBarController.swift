@@ -8,6 +8,7 @@ final class MenuBarController: NSObject {
     private let statusItem: NSStatusItem
     private var cancellables = Set<AnyCancellable>()
     private var settingsWindow: NSWindow?
+    private var snippetsWindow: NSWindow?
 
     private override init() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -59,6 +60,10 @@ final class MenuBarController: NSObject {
         let updateDictItem = NSMenuItem(title: "Update Dictionary", action: #selector(updateDictionary), keyEquivalent: "d")
         updateDictItem.target = self
         menu.addItem(updateDictItem)
+
+        let snippetsItem = NSMenuItem(title: "Manage Snippets", action: #selector(openSnippets), keyEquivalent: "")
+        snippetsItem.target = self
+        menu.addItem(snippetsItem)
 
         let settingsItem = NSMenuItem(title: "Settings", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
@@ -148,6 +153,33 @@ final class MenuBarController: NSObject {
         NSApp.activate(ignoringOtherApps: true)
 
         settingsWindow = window
+    }
+
+    @objc private func openSnippets() {
+        if let existing = snippetsWindow, existing.isVisible {
+            existing.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let backendClient = AppManager.shared.localBackendClient
+        let snippetsView  = SnippetsView(backendClient: backendClient)
+        let hostingView   = NSHostingView(rootView: snippetsView)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 480),
+            styleMask:   [.titled, .closable, .resizable],
+            backing:     .buffered,
+            defer:       false
+        )
+        window.title                = "Voice Snippets"
+        window.contentView          = hostingView
+        window.isReleasedWhenClosed = false
+        window.minSize              = NSSize(width: 480, height: 360)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        snippetsWindow = window
     }
 
     @objc private func quitApp() {

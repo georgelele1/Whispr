@@ -249,15 +249,27 @@ final class LocalBackendClient: ObservableObject {
                 return
             }
 
-            let group = DispatchGroup()
-            group.enter()
+            // Read pipes concurrently while process runs to avoid blocking
+            var outputData = Data()
+            var errorData  = Data()
+            let readGroup  = DispatchGroup()
+
+            readGroup.enter()
             DispatchQueue.global(qos: .userInitiated).async {
-                process.waitUntilExit()
-                group.leave()
+                outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+                readGroup.leave()
             }
 
-            let waitResult = group.wait(timeout: .now() + self.timeout)
-            if waitResult == .timedOut {
+            readGroup.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                readGroup.leave()
+            }
+
+            process.waitUntilExit()
+            _ = readGroup.wait(timeout: .now() + self.timeout)
+
+            if process.terminationStatus != 0 && outputData.isEmpty {
                 process.terminate()
                 DispatchQueue.main.async {
                     completion(.failure(NSError(
@@ -268,8 +280,8 @@ final class LocalBackendClient: ObservableObject {
                 return
             }
 
-            let outputString = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            let errorString  = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let outputString = String(data: outputData, encoding: .utf8) ?? ""
+            let errorString  = String(data: errorData,  encoding: .utf8) ?? ""
 
             print("STDOUT:", outputString)
             print("STDERR:", errorString)
@@ -443,6 +455,48 @@ final class LocalBackendClient: ObservableObject {
         let calendarScript = URL(fileURLWithPath: backendScriptPath)
             .deletingLastPathComponent().appendingPathComponent("gcalendar.py").path
         runPythonCommand(script: calendarScript, arguments: ["disconnect"]) { result in
+            if case .success = result { completion(true) } else { completion(false) }
+        }
+    }
+
+    // =========================================================
+    // Snippets
+    // =========================================================
+
+    private var snippetsScriptPath: String? {
+        guard let backendScriptPath else { return nil }
+        return URL(fileURLWithPath: backendScriptPath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("snippets.py").path
+    }
+
+    func listSnippets(completion: @escaping ([[String: Any]]) -> Void) {
+        guard let script = snippetsScriptPath else { completion([]); return }
+        runPythonCommand(script: script, arguments: ["cli", "list"]) { result in
+            guard case .success(let output) = result else { completion([]); return }
+            let lines = output.components(separatedBy: .newlines)
+            for line in lines {
+                guard let data = line.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let snippets = json["snippets"] as? [[String: Any]]
+                else { continue }
+                completion(snippets)
+                return
+            }
+            completion([])
+        }
+    }
+
+    func addSnippet(trigger: String, expansion: String, completion: @escaping (Bool) -> Void) {
+        guard let script = snippetsScriptPath else { completion(false); return }
+        runPythonCommand(script: script, arguments: ["cli", "add", trigger, expansion]) { result in
+            if case .success = result { completion(true) } else { completion(false) }
+        }
+    }
+
+    func removeSnippet(trigger: String, completion: @escaping (Bool) -> Void) {
+        guard let script = snippetsScriptPath else { completion(false); return }
+        runPythonCommand(script: script, arguments: ["cli", "remove", trigger]) { result in
             if case .success = result { completion(true) } else { completion(false) }
         }
     }
