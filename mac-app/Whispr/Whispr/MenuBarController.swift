@@ -8,7 +8,9 @@ final class MenuBarController: NSObject {
     private let statusItem: NSStatusItem
     private var cancellables = Set<AnyCancellable>()
     private var settingsWindow: NSWindow?
-    private var snippetsWindow: NSWindow?
+    private var snippetsWindow   : NSWindow?
+    private var dictionaryWindow : NSWindow?
+    private var historyWindow    : NSWindow?
 
     private override init() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -64,6 +66,14 @@ final class MenuBarController: NSObject {
         let snippetsItem = NSMenuItem(title: "Manage Snippets", action: #selector(openSnippets), keyEquivalent: "")
         snippetsItem.target = self
         menu.addItem(snippetsItem)
+
+        let dictionaryItem = NSMenuItem(title: "My Dictionary", action: #selector(openDictionary), keyEquivalent: "")
+        dictionaryItem.target = self
+        menu.addItem(dictionaryItem)
+
+        let historyItem = NSMenuItem(title: "History", action: #selector(openHistory), keyEquivalent: "")
+        historyItem.target = self
+        menu.addItem(historyItem)
 
         let settingsItem = NSMenuItem(title: "Settings", action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.target = self
@@ -180,6 +190,52 @@ final class MenuBarController: NSObject {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         snippetsWindow = window
+    }
+
+    @objc private func openDictionary() {
+        if let existing = dictionaryWindow, existing.isVisible {
+            existing.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let view       = DictionaryView(backendClient: AppManager.shared.localBackendClient)
+        let hosting    = NSHostingView(rootView: view)
+        let window     = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 520),
+            styleMask:   [.titled, .closable, .resizable],
+            backing:     .buffered, defer: false
+        )
+        window.title                = "My Dictionary"
+        window.contentView          = hosting
+        window.isReleasedWhenClosed = false
+        window.minSize              = NSSize(width: 520, height: 380)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        dictionaryWindow = window
+    }
+
+    @objc private func openHistory() {
+        if let existing = historyWindow, existing.isVisible {
+            existing.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let view       = HistoryView(backendClient: AppManager.shared.localBackendClient)
+        let hosting    = NSHostingView(rootView: view)
+        let window     = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 680, height: 520),
+            styleMask:   [.titled, .closable, .resizable],
+            backing:     .buffered, defer: false
+        )
+        window.title                = "Transcription History"
+        window.contentView          = hosting
+        window.isReleasedWhenClosed = false
+        window.minSize              = NSSize(width: 560, height: 400)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        historyWindow = window
     }
 
     @objc private func quitApp() {

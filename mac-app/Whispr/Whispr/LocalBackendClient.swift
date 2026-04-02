@@ -500,4 +500,67 @@ final class LocalBackendClient: ObservableObject {
             if case .success = result { completion(true) } else { completion(false) }
         }
     }
+
+    // =========================================================
+    // Dictionary
+    // =========================================================
+
+    private var dictionaryAgentPath: String? {
+        guard let backendScriptPath else { return nil }
+        return URL(fileURLWithPath: backendScriptPath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("dictionary_agent.py").path
+    }
+
+    func listDictionaryTerms(completion: @escaping ([[String: Any]]) -> Void) {
+        guard let script = dictionaryAgentPath else { completion([]); return }
+        runPythonCommand(script: script, arguments: ["cli", "list"]) { result in
+            guard case .success(let output) = result else { completion([]); return }
+            for line in output.components(separatedBy: .newlines) {
+                guard let data = line.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let dict = json["output"] as? [String: Any],
+                      let terms = dict["terms"] as? [[String: Any]]
+                else { continue }
+                completion(terms)
+                return
+            }
+            completion([])
+        }
+    }
+
+    func addDictionaryTerm(phrase: String, aliases: [String], completion: @escaping (Bool) -> Void) {
+        guard let script = dictionaryAgentPath else { completion(false); return }
+        let aliasStr = aliases.joined(separator: ",")
+        runPythonCommand(script: script, arguments: ["cli", "add", phrase, aliasStr]) { result in
+            if case .success = result { completion(true) } else { completion(false) }
+        }
+    }
+
+    func removeDictionaryTerm(phrase: String, completion: @escaping (Bool) -> Void) {
+        guard let script = dictionaryAgentPath else { completion(false); return }
+        runPythonCommand(script: script, arguments: ["cli", "remove", phrase]) { result in
+            if case .success = result { completion(true) } else { completion(false) }
+        }
+    }
+
+    // =========================================================
+    // History
+    // =========================================================
+
+    func loadHistory(completion: @escaping ([[String: Any]]) -> Void) {
+        guard let backendScriptPath else { completion([]); return }
+        runPythonCommand(script: backendScriptPath, arguments: ["cli", "get-history"]) { result in
+            guard case .success(let output) = result else { completion([]); return }
+            for line in output.components(separatedBy: .newlines) {
+                guard let data = line.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let items = json["items"] as? [[String: Any]]
+                else { continue }
+                completion(items)
+                return
+            }
+            completion([])
+        }
+    }
 }
