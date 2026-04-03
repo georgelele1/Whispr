@@ -392,7 +392,7 @@ def ai_refine_text(
     app_hint  = f"Active app: {app_name.strip()}. " if app_name.strip() and app_name.strip() != "unknown" else ""
     user_ctx  = get_user_context()
     ctx_hint  = f"User context: {user_ctx} " if user_ctx else ""
-    trans     = f"Translate to {lang}." if lang != "English" else ""
+    trans     = f"Your entire output MUST be in {lang} — translate everything." if lang != "English" else ""
 
     has_dict  = bool(load_dictionary().get("terms"))
     dict_step = "1. Call get_dictionary_terms and apply corrections. " if has_dict else ""
@@ -729,7 +729,9 @@ def knowledge_lookup(text: str, app_name: str = "", target_language: str = "") -
             "5. Tailor answer to active app context if relevant "
             "(e.g. if app is Xcode → favour code examples; Mail → prose explanation). "
             "6. Output ONLY the answer — no preamble ('Here is', 'Sure'). "
-            f"7. Output language: {lang}. Translate the answer to {lang} if not English. "
+            f"7. IMPORTANT: Your entire response MUST be written in {lang}. "
+            f"If {lang} is not English, write everything in {lang} — including explanations, "
+            f"examples, and labels. Only keep technical symbols (F, m, a, =) as-is. "
             f"{session_hint}"
         ),
     )
@@ -756,18 +758,23 @@ def transcribe_and_enhance_impl(
     audio_path: str,
     app_name: str = "",
     target_language: str = "",
+    _raw_text_override: str = "",
 ) -> Dict[str, Any]:
-
-    audio_path = str(Path(audio_path).expanduser())
-    if not Path(audio_path).exists():
-        return {"ok": False, "error": f"audio file not found: {audio_path}", "ts": now_ms()}
 
     t0 = time.perf_counter()
 
-    # 1. Transcribe
-    raw_text = transcribe_audio(audio_path)
-    t1 = time.perf_counter()
-    print(f"[pipeline] transcribe {(t1-t0)*1000:.0f}ms  {raw_text[:60]!r}", file=sys.stderr)
+    # 1. Transcribe (or use override for testing without audio)
+    if _raw_text_override:
+        raw_text = _raw_text_override
+        t1 = time.perf_counter()
+        print(f"[pipeline] text override: {raw_text[:60]!r}", file=sys.stderr)
+    else:
+        audio_path = str(Path(audio_path).expanduser())
+        if not Path(audio_path).exists():
+            return {"ok": False, "error": f"audio file not found: {audio_path}", "ts": now_ms()}
+        raw_text = transcribe_audio(audio_path)
+        t1 = time.perf_counter()
+        print(f"[pipeline] transcribe {(t1-t0)*1000:.0f}ms  {raw_text[:60]!r}", file=sys.stderr)
 
     if not raw_text.strip():
         return {"ok": False, "error": "transcription returned empty", "ts": now_ms()}
@@ -957,37 +964,22 @@ if __name__ == "__main__":
             _exit_json({"output": ""}, 1)
 
     elif command == "refine":
-        # Test refine pipeline with raw text — no audio file needed
-        # Usage: python app.py cli refine "uh so the meeting is uh tomorrow" [app_name] [language]
+        # Test full pipeline with raw text — no audio file needed
+        # Usage: python app.py cli refine "<text>" [app_name] [language]
         raw_text        = sys.argv[3] if len(sys.argv) > 3 else ""
         app_name        = sys.argv[4] if len(sys.argv) > 4 else "unknown"
         target_language = sys.argv[5] if len(sys.argv) > 5 else ""
         if not raw_text:
             _exit_json({"error": "no text provided"}, 1)
         try:
-            snippet_triggers = _load_snippet_triggers()
-            intent           = detect_intent(raw_text, snippet_triggers)
-            intent_type      = intent.get("type", "text")
-            print(f"[test] intent={intent_type}", file=sys.stderr)
-
-            if intent_type == "search":
-                from gcalendar import search_events, extract_search_intent
-                import getpass
-                si = extract_search_intent(raw_text)
-                output = search_events(query=si.get("query") or raw_text, user_id=getpass.getuser())
-            elif intent_type == "calendar":
-                from gcalendar import get_schedule, extract_calendar_intent
-                import getpass
-                cal = extract_calendar_intent(raw_text)
-                output = get_schedule(date=cal.get("date") or "today", user_id=getpass.getuser())
-            elif intent_type == "knowledge":
-                output = knowledge_lookup(raw_text)
-            else:
-                refined  = ai_refine_text(raw_text, app_name, target_language)
-                corrected = self_correct_text(raw_text, refined, app_name, target_language)
-                output    = apply_inline_snippets(corrected)
-
-            _exit_json({"input": raw_text, "intent": intent_type, "output": output})
+            # Run through the same pipeline as real transcription
+            result = transcribe_and_enhance_impl(
+                audio_path="__text_input__",
+                app_name=app_name,
+                target_language=target_language,
+                _raw_text_override=raw_text,
+            )
+            _exit_json({"input": raw_text, "intent": "agent", "output": result.get("final_text", "")})
         except Exception as e:
             print(f"ERROR: {e}", file=sys.stderr)
             _exit_json({"output": ""}, 1)
