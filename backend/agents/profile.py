@@ -7,6 +7,12 @@ Provides get_user_context() which returns the cached string in 0ms.
 """
 from __future__ import annotations
 
+import sys as _sys
+from pathlib import Path as _Path
+_backend_root = str(_Path(__file__).resolve().parents[2])
+if _backend_root not in _sys.path:
+    _sys.path.insert(0, _backend_root)
+
 import io as _io
 import sys
 import threading
@@ -35,29 +41,45 @@ _PROFILE_UPDATED    : bool = False
 # =========================================================
 
 def _build_user_context() -> str:
-    """Build context string from profile.json + recent history.
-    No LLM call — purely reads from disk.
+    """Build context string merging manual profile + auto-learned description.
+
+    Manual fields (set by user in Settings) take priority.
+    Learned description adds behavioural context from usage history.
+    Recent history adds short-term memory.
     """
     parts   = []
     profile = load_profile()
     learned = profile.get("learned", {})
 
-    name = profile.get("name", "").strip()
-    role = profile.get("role", "").strip()
-    org  = profile.get("organization", "").strip()
+    # Manual identity fields — set by user in Settings UI
+    name  = profile.get("name", "").strip()
+    role  = profile.get("role", "").strip()
+    org   = profile.get("organization", "").strip()
+    email = profile.get("email", "").strip()
     if name:           parts.append(f"User: {name}.")
     if role and org:   parts.append(f"Role: {role} at {org}.")
     elif role or org:  parts.append(f"Role: {role or org}.")
+    if email:          parts.append(f"Email: {email}.")
 
+    # Auto-learned description — generated from usage history
+    # Merged with manual fields: adds behavioural context the user didn't manually specify
     description = learned.get("description", "").strip()
-    if description:    parts.append(description)
+    if description:
+        # Avoid repeating info already in manual fields
+        if name and name.lower() in description.lower():
+            parts.append(description)
+        elif not name:
+            parts.append(description)
+        else:
+            parts.append(description)
 
+    # Short-term memory — last 5 utterances
     recent = [
         str(i.get("final_text", ""))[:80]
         for i in load_history().get("items", [])[-5:]
         if str(i.get("final_text", "")).strip()
     ]
-    if recent:         parts.append(f"Recent: {' | '.join(recent)}.")
+    if recent:         parts.append("Recent: " + " | ".join(recent) + ".")
 
     return " ".join(parts)
 
