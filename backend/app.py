@@ -3,7 +3,7 @@ app.py — Whispr main pipeline orchestrator.
 
 Thin entry point — all logic lives in agents/ modules:
   agents/profile.py   — user context + profile learning
-  agents/plugins/knowledge.py — facts, formulas, definitions
+  agents/knowledge.py — facts, formulas, definitions
   agents/refiner.py   — text cleaning and formatting
   agents/router.py    — intent detection and routing
 
@@ -205,19 +205,6 @@ def _exit_json(data, code=0):
     sys.exit(code)
 
 
-# ── Startup: build context cache + update profile once in background ──
-def _startup_init() -> None:
-    """Called once when module is first imported as the main pipeline.
-    Builds user context cache and runs profile update in background.
-    """
-    _threading.Thread(target=get_user_context, daemon=True).start()
-    _threading.Thread(target=update_profile_from_history, daemon=True).start()
-
-# Run startup when invoked directly (CLI) or imported as module
-# Lock in update_profile_from_history prevents double execution
-_startup_init()
-
-
 if __name__ == "__main__":
     if not (len(sys.argv) > 1 and sys.argv[1] == "cli"):
         addr = load(CO_DIR)
@@ -271,6 +258,25 @@ if __name__ == "__main__":
         ok = set_target_language(language)
         _exit_json({"ok": ok, "language": language, "error": f"unsupported: {language}" if not ok else None, "supported": SUPPORTED_LANGUAGES}, 0 if ok else 1)
 
+    elif command == "set-profile":
+        name         = sys.argv[3] if len(sys.argv) > 3 else ""
+        email        = sys.argv[4] if len(sys.argv) > 4 else ""
+        organization = sys.argv[5] if len(sys.argv) > 5 else ""
+        role         = sys.argv[6] if len(sys.argv) > 6 else ""
+        profile = load_profile()
+        if name:         profile["name"]         = name
+        if email:        profile["email"]        = email
+        if organization: profile["organization"] = organization
+        if role:         profile["role"]         = role
+        save_profile(profile)
+        # Invalidate context cache so next call picks up new values
+        from agents.profile import invalidate_context_cache
+        invalidate_context_cache()
+        _exit_json({"ok": True, "profile": profile})
+
+    elif command == "get-profile":
+        _exit_json({"ok": True, "profile": load_profile()})
+
     elif command == "get-language":
         _exit_json({"ok": True, "language": get_target_language(), "supported": SUPPORTED_LANGUAGES})
 
@@ -278,6 +284,10 @@ if __name__ == "__main__":
         data  = load_history()
         items = list(reversed(data.get("items", [])))
         _exit_json({"items": items[:100]})
+
+    elif command == "clear-history":
+        save_store("history.json", {"items": []})
+        _exit_json({"ok": True, "message": "History cleared"})
 
     else:
         audio_path      = sys.argv[2]
