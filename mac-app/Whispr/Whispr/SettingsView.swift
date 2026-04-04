@@ -1,40 +1,32 @@
 import SwiftUI
 
 struct SettingsView: View {
-    @State private var selectedLanguage   = Config.targetLanguage
-    @State private var syncStatus: String = ""
-    @State private var calendarEmail: String = "Not connected"
+
+    @State private var selectedLanguage = Config.targetLanguage
+    @State private var syncStatus       = ""
+    @State private var calendarEmail    = "Not connected"
 
     var backendClient: LocalBackendClient?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 20) {
 
             Text("Whispr Settings")
                 .font(.title2)
                 .bold()
-            Text("Whispr Settings")
-                .font(.title2)
-                .bold()
 
-            Divider()
             Divider()
 
             // ── Hotkeys ───────────────────────────────────────
-            Group {
-                Label("Start recording:  Command + Shift + Space", systemImage: "mic")
-                Label("Stop recording:   Command + Shift + S",     systemImage: "stop.circle")
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Start recording:  ⌘ ⇧ Space", systemImage: "mic")
+                Label("Stop recording:   ⌘ ⇧ S",     systemImage: "stop.circle")
             }
             .font(.subheadline)
             .foregroundColor(.secondary)
 
             Divider()
-            Divider()
 
-            // ── Output language ───────────────────────────────
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Output language")
-                    .font(.headline)
             // ── Output language ───────────────────────────────
             VStack(alignment: .leading, spacing: 8) {
                 Text("Output language")
@@ -43,28 +35,7 @@ struct SettingsView: View {
                 Text("Transcribed text will be translated to this language.")
                     .font(.caption)
                     .foregroundColor(.secondary)
-                Text("Transcribed text will be translated to this language.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
 
-                HStack(spacing: 12) {
-                    Picker("", selection: $selectedLanguage) {
-                        ForEach(Config.supportedLanguages, id: \.self) { lang in
-                            Text(lang).tag(lang)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                    .frame(width: 160)
-                    .onChange(of: selectedLanguage) { newValue in
-                        Config.targetLanguage = newValue
-                        syncStatus = "Saving..."
-                        backendClient?.syncLanguageToBackend { success in
-                            syncStatus = success ? "Saved" : "Saved locally"
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                                syncStatus = ""
-                            }
-                        }
-                    }
                 HStack(spacing: 12) {
                     Picker("", selection: $selectedLanguage) {
                         ForEach(Config.supportedLanguages, id: \.self) { lang in
@@ -91,65 +62,43 @@ struct SettingsView: View {
                     }
                 }
             }
-                    if !syncStatus.isEmpty {
-                        Text(syncStatus)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-            }
 
             Divider()
-            Divider()
 
-            // ── Google Calendar ───────────────────────────────
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Google Calendar")
-                    .font(.headline)
             // ── Google Calendar ───────────────────────────────
             VStack(alignment: .leading, spacing: 8) {
                 Text("Google Calendar")
                     .font(.headline)
 
                 HStack(spacing: 10) {
-                    Image(systemName: calendarEmail == "Not connected" ? "calendar.badge.exclamationmark" : "calendar.badge.checkmark")
+                    Image(systemName: calendarEmail == "Not connected"
+                          ? "calendar.badge.exclamationmark"
+                          : "calendar.badge.checkmark")
                         .foregroundColor(calendarEmail == "Not connected" ? .orange : .green)
 
                     Text(calendarEmail)
                         .font(.subheadline)
                         .foregroundColor(calendarEmail == "Not connected" ? .secondary : .primary)
                 }
-                    Text(calendarEmail)
-                        .font(.subheadline)
-                        .foregroundColor(calendarEmail == "Not connected" ? .secondary : .primary)
-                }
 
                 if calendarEmail == "Not connected" || calendarEmail == "Connecting..." {
-                    Button("Connect Google Calendar") {
-                        connectCalendar()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(calendarEmail == "Connecting...")
+                    Button("Connect Google Calendar") { connectCalendar() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(calendarEmail == "Connecting...")
                 } else {
                     HStack(spacing: 8) {
-                        Button("Switch account") {
-                            connectCalendar()
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-
-                        Button("Disconnect") {
-                            disconnectCalendar()
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .foregroundColor(.red)
+                        Button("Switch account") { connectCalendar() }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        Button("Disconnect") { disconnectCalendar() }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .foregroundColor(.red)
                     }
                 }
             }
 
-            Divider()
             Divider()
 
             // ── Backend info ──────────────────────────────────
@@ -160,17 +109,14 @@ struct SettingsView: View {
             .font(.caption)
             .foregroundColor(.secondary)
 
+            Spacer()
         }
         .padding()
         .frame(width: 420, height: 360)
-        .padding()
-        .frame(width: 420, height: 360)
         .onAppear {
-            // Small delay to ensure backend process is ready
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 loadCurrentCalendarEmail()
             }
-
             backendClient?.fetchLanguageFromBackend { lang in
                 if let lang = lang, Config.supportedLanguages.contains(lang) {
                     DispatchQueue.main.async {
@@ -183,10 +129,9 @@ struct SettingsView: View {
     }
 
     // =========================================================
-    // Helpers
+    // Calendar helpers
     // =========================================================
 
-    /// Read the saved Google email from the Python tokens directory.
     private func loadCurrentCalendarEmail() {
         backendClient?.fetchCalendarEmail { email in
             DispatchQueue.main.async {
@@ -212,4 +157,3 @@ struct SettingsView: View {
         }
     }
 }
-
