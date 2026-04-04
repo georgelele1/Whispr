@@ -46,7 +46,18 @@ _SEARCH = re.compile(
 
 class CalendarPlugin(WhisprPlugin):
     name        = "calendar"
-    description = "Fetch Google Calendar schedule or search for specific events"
+    description = (
+        "Fetches the user Google Calendar schedule for a date, or searches for "
+        "a specific event by keyword. Use when user wants to SEE their schedule "
+        "or FIND a specific event like an exam, meeting, or appointment."
+    )
+    examples    = [
+        "check my schedule for today",
+        "what is on my calendar tomorrow",
+        "when is my exam",
+        "find my dentist appointment",
+        "show my events for Friday",
+    ]
     priority    = 20
 
     def can_handle(self, text: str, context: dict) -> bool:
