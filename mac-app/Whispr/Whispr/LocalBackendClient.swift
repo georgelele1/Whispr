@@ -578,6 +578,13 @@ final class LocalBackendClient: ObservableObject {
     // History
     // =========================================================
 
+    func clearHistory(completion: @escaping (Bool) -> Void) {
+        guard let backendScriptPath else { completion(false); return }
+        runPythonCommand(script: backendScriptPath, arguments: ["cli", "clear-history"]) { result in
+            if case .success = result { completion(true) } else { completion(false) }
+        }
+    }
+
     func loadHistory(completion: @escaping ([[String: Any]]) -> Void) {
         guard let backendScriptPath else { completion([]); return }
         runPythonCommand(script: backendScriptPath, arguments: ["cli", "get-history"]) { result in
