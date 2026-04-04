@@ -79,10 +79,22 @@ _TRIGGERS = re.compile(
 
 class KnowledgePlugin(WhisprPlugin):
     name        = "knowledge"
-    description = "Look up facts, formulas, scientific laws, definitions and explanations"
-    priority    = 10  # checked early
+    description = (
+        "Answers questions about facts, formulas, scientific laws, definitions, "
+        "explanations, history, math, chemistry, physics, CS concepts, and any "
+        "domain knowledge. Also handles follow-up questions about previous answers."
+    )
+    examples    = [
+        "give me Newton second law",
+        "explain redox in chemistry",
+        "what is the formula for gravity",
+        "what does each character mean",
+        "difference between if and while loop",
+    ]
+    priority    = 10
 
     def can_handle(self, text: str, context: dict) -> bool:
+        # Fast-path for very clear knowledge requests
         return bool(_TRIGGERS.search(text)) or is_followup(text)
 
     def run(self, text: str, context: dict) -> str:
