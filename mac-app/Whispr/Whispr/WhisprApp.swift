@@ -3,21 +3,22 @@ import AppKit
 import AVFoundation
 import Combine
 
+// =========================================================
+// WhisprApp
+// Entry point. Settings are now embedded in the sidebar so
+// we no longer need a separate Settings scene.
+// All other launch logic is unchanged from baseline.
+// =========================================================
+
 @main
 struct WhisprApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
+        // Empty Settings scene keeps macOS happy (prevents
+        // a default empty window on launch)
         Settings {
-            SettingsView()
-        }
-        .commands {
-            CommandGroup(after: .appSettings) {
-                Button("Set Recording Hotkey") {
-                    AppManager.shared.hotkeyManager.showHotkeyConfiguration()
-                }
-                .keyboardShortcut(.space, modifiers: [.command, .shift])
-            }
+            EmptyView()
         }
     }
 }
