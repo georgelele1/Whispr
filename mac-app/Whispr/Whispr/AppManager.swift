@@ -36,11 +36,9 @@ final class AppManager: ObservableObject {
 
                 if isRecording {
                     self.updateAppStatus(.listening)
-                    // Temporarily disabled while debugging crash / window issues
-                    // self.floatingIndicator.showIndicator()
+                    self.floatingIndicator.showIndicator()
                 } else {
-                    // Temporarily disabled while debugging crash / window issues
-                    // self.floatingIndicator.hideIndicator()
+                    self.floatingIndicator.hideIndicator()
                 }
             }
             .store(in: &cancellables)
