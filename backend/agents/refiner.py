@@ -190,7 +190,12 @@ def ai_refine_text(
             "If document editor → use clear paragraphs and proper structure. "
             f"{offset+4}. Fix punctuation and capitalisation. "
             f"{trans} "
-            "Output ONLY the final formatted text. No explanation."
+            "CRITICAL: Output ONLY the final formatted text. "
+            "Do NOT start with any preamble, introduction, or label — never write phrases like "
+            "'Here is the transcription', 'Here\\'s the transcribed text', "
+            "'This is the transcribed audio output', 'Sure, here you go', "
+            "'Transcription:', 'Output:', or any variation. "
+            "Your first word must be the first word of the actual content."
         ),
     )
     if has_dict:
