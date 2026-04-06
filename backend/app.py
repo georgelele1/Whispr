@@ -285,6 +285,40 @@ if __name__ == "__main__":
         items = list(reversed(data.get("items", [])))
         _exit_json({"items": items[:100]})
 
+    elif command == "save-profile":
+        import json as _json
+        data = _json.loads(sys.argv[3]) if len(sys.argv) > 3 else {}
+        from agents.profile import complete_onboarding
+        complete_onboarding(
+            career_area   = data.get("career_area", ""),
+            usage_type    = data.get("usage_type", []),
+            writing_style = data.get("writing_style", "casual"),
+            language      = data.get("language", ""),
+        )
+        _exit_json({"ok": True, "profile": load_profile()})
+
+    elif command == "is-first-launch":
+        from agents.profile import is_first_launch
+        _exit_json({"first_launch": is_first_launch()})
+
+    elif command == "list-insertions":
+        from storage import load_text_insertions
+        items = load_text_insertions()
+        _exit_json({"ok": True, "insertions": items})
+
+    elif command == "save-insertion":
+        label = sys.argv[3] if len(sys.argv) > 3 else ""
+        value = sys.argv[4] if len(sys.argv) > 4 else ""
+        from storage import save_text_insertion
+        ok = save_text_insertion(label, value)
+        _exit_json({"ok": ok})
+
+    elif command == "remove-insertion":
+        label = sys.argv[3] if len(sys.argv) > 3 else ""
+        from storage import remove_text_insertion
+        ok = remove_text_insertion(label)
+        _exit_json({"ok": ok})
+
     # ── Data-management commands ─────────────────────────────────────────────
 
     elif command == "clear-history":
