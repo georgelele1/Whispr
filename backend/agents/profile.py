@@ -34,30 +34,89 @@ _PROFILE_UPDATED    : bool = False
 # Context building — disk read only, 0ms after first call
 # =========================================================
 
+def is_first_launch() -> bool:
+    """True if the user has never completed onboarding."""
+    return not load_profile().get("onboarding_done", False)
+
+
+def complete_onboarding(
+    career_area  : str        = "",
+    usage_type   : list | None = None,
+    writing_style: str        = "casual",
+    language     : str        = "",
+) -> None:
+    """Save onboarding answers and mark setup as done.
+
+    Only stores behavioural preferences — no PII.
+    """
+    from storage import SUPPORTED_LANGUAGES
+    profile = load_profile()
+    if career_area:
+        profile["career_area"] = career_area.strip()
+    profile["usage_type"]    = [u for u in (usage_type or []) if u]
+    profile["writing_style"] = writing_style if writing_style in ("formal", "casual", "technical") else "casual"
+    if language in SUPPORTED_LANGUAGES:
+        profile.setdefault("preferences", {})["target_language"] = language
+    profile["onboarding_done"] = True
+    save_profile(profile)
+    invalidate_context_cache()
+
+
 def _build_user_context() -> str:
-    """Build context string from profile.json + recent history.
-    No LLM call — purely reads from disk.
+    """Build a concise behavioural context string for all agents.
+
+    No PII — only habits, usage patterns, and learned behaviour.
+    Zero LLM calls — reads from disk only.
     """
     parts   = []
     profile = load_profile()
     learned = profile.get("learned", {})
 
-    name = profile.get("name", "").strip()
-    role = profile.get("role", "").strip()
-    org  = profile.get("organization", "").strip()
-    if name:           parts.append(f"User: {name}.")
-    if role and org:   parts.append(f"Role: {role} at {org}.")
-    elif role or org:  parts.append(f"Role: {role or org}.")
+    career = profile.get("career_area", "").strip()
+    if career:
+        parts.append(f"Professional area: {career}.")
+
+    usage = profile.get("usage_type", [])
+    if usage:
+        parts.append(f"Uses Whispr mainly for: {', '.join(usage)}.")
+
+    style = profile.get("writing_style", "").strip()
+    if style:
+        parts.append(f"Preferred writing style: {style}.")
+
+    lang = profile.get("preferences", {}).get("target_language", "")
+    if lang and lang != "English":
+        parts.append(f"Output language: {lang}.")
 
     description = learned.get("description", "").strip()
-    if description:    parts.append(description)
+    if description:
+        parts.append(description)
+
+    habits = learned.get("habits", [])
+    if habits:
+        parts.append(f"Recurring topics/phrases: {', '.join(habits[:6])}.")
+
+    freq_apps = learned.get("frequent_apps", [])
+    if freq_apps:
+        parts.append(f"Frequently used apps: {', '.join(freq_apps[:5])}.")
+
+    insertions = profile.get("text_insertions", [])
+    if insertions:
+        labels = [
+            f"{i['label']} = {i['value']}"
+            for i in insertions
+            if i.get("label") and i.get("value")
+        ]
+        if labels:
+            parts.append(f"Text insertion shortcuts: {'; '.join(labels)}.")
 
     recent = [
         str(i.get("final_text", ""))[:80]
         for i in load_history().get("items", [])[-5:]
         if str(i.get("final_text", "")).strip()
     ]
-    if recent:         parts.append(f"Recent: {' | '.join(recent)}.")
+    if recent:
+        parts.append(f"Recent dictations: {' | '.join(recent)}.")
 
     return " ".join(parts)
 
@@ -100,32 +159,54 @@ def update_profile_from_history() -> None:
         if len(texts) < 5:
             return
 
-        sample       = "\n".join(f"- {t[:100]}" for t in texts[-30:])
+        sample = "\n".join(f"- {t[:120]}" for t in texts[-30:])
         prompt_input = (
-            f"Recent transcriptions (last 30):\n{sample}\n\n"
-            "Write a 2-4 sentence profile of this user based on their transcriptions. "
-            "Be specific — use actual names, project codes, tools from the text. "
-            "Plain text only."
+            f"Transcription samples ({len(texts[-30:])} entries):\n{sample}\n\n"
+            "Analyse these voice dictations and extract behavioural patterns only. "
+            "No names, no emails, no personal identifiers. Focus on:\n"
+            "1. Professional domain and topics\n"
+            "2. What they use voice dictation for\n"
+            "3. Recurring technical terms or jargon\n"
+            "4. Communication style\n"
+            "Return ONLY valid JSON: "
+            '{"description": "2-3 sentence behavioural summary", '
+            '"habits": ["phrase or topic", ...], '
+            '"frequent_apps": ["app name", ...]}'  
         )
 
         agent = Agent(
             model="gpt-5",
             name="whispr_profile_learner",
             system_prompt=(
-                "You are a user profiling agent. "
-                "Analyse transcriptions and write a concise personal profile. "
-                "Plain text, 2-4 sentences, no bullet points."
+                "You are a usage-pattern analyser for a voice transcription app. "
+                "Extract behavioural habits and work patterns only — no PII. "
+                "Return ONLY valid JSON with keys: description, habits, frequent_apps. "
+                "No markdown, no explanation, no preamble."
             ),
         )
 
-        description = str(agent.input(prompt_input)).strip()
+        raw = str(agent.input(prompt_input)).strip().strip("`").strip()
+        if raw.startswith("json"):
+            raw = raw[4:].strip()
+        try:
+            import json as _json
+            parsed      = _json.loads(raw)
+            description = str(parsed.get("description", "")).strip()
+            habits      = [str(h).strip() for h in parsed.get("habits", []) if str(h).strip()][:10]
+            freq_apps   = [str(a).strip() for a in parsed.get("frequent_apps", []) if str(a).strip()][:8]
+        except Exception:
+            description = raw[:400] if raw else ""
+            habits, freq_apps = [], []
+
         if not description:
             return
 
         profile = load_profile()
         profile.setdefault("learned", {})
-        profile["learned"]["description"]  = description
-        profile["learned"]["last_updated"] = len(load_history().get("items", []))
+        profile["learned"]["description"]   = description
+        profile["learned"]["habits"]        = habits
+        profile["learned"]["frequent_apps"] = freq_apps
+        profile["learned"]["last_updated"]  = len(load_history().get("items", []))
         save_profile(profile)
 
         # Rebuild cache with new description
