@@ -151,7 +151,7 @@ final class AppManager: ObservableObject {
                 case .success(let text):
                     self.lastOutputText = text
                     self.updateAppStatus(.idle)
-                    FloatingResultWindow.show(text: text)
+                    // Text is pasted directly — no floating window needed
                     self.pasteTextToActiveApp(text: text)
 
                 case .failure(let error):
