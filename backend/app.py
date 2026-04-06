@@ -285,9 +285,58 @@ if __name__ == "__main__":
         items = list(reversed(data.get("items", [])))
         _exit_json({"items": items[:100]})
 
+    # ── Data-management commands ─────────────────────────────────────────────
+
     elif command == "clear-history":
         save_store("history.json", {"items": []})
         _exit_json({"ok": True, "message": "History cleared"})
+
+    elif command == "clear-dictionary":
+        save_store("dictionary.json", {"terms": []})
+        _exit_json({"ok": True, "message": "Dictionary cleared"})
+
+    elif command == "clear-snippets":
+        snippets_path = app_support_dir() / "snippets.json"
+        snippets_path.write_text(
+            json.dumps({"snippets": []}, indent=2), encoding="utf-8"
+        )
+        _exit_json({"ok": True, "message": "Snippets cleared"})
+
+    elif command == "reset-profile":
+        current_lang  = get_target_language()
+        blank_profile = {
+            "name": "", "email": "", "organization": "", "role": "",
+            "preferences": {"target_language": current_lang},
+            "learned": {"description": "", "last_updated": 0},
+        }
+        save_profile(blank_profile)
+        try:
+            from agents.profile import invalidate_context_cache
+            invalidate_context_cache()
+        except Exception:
+            pass
+        _exit_json({"ok": True, "message": "Profile reset", "profile": blank_profile})
+
+    elif command == "reset-all":
+        save_store("history.json",    {"items": []})
+        save_store("dictionary.json", {"terms": []})
+        snippets_path = app_support_dir() / "snippets.json"
+        snippets_path.write_text(
+            json.dumps({"snippets": []}, indent=2), encoding="utf-8"
+        )
+        current_lang  = get_target_language()
+        blank_profile = {
+            "name": "", "email": "", "organization": "", "role": "",
+            "preferences": {"target_language": current_lang},
+            "learned": {"description": "", "last_updated": 0},
+        }
+        save_profile(blank_profile)
+        try:
+            from agents.profile import invalidate_context_cache
+            invalidate_context_cache()
+        except Exception:
+            pass
+        _exit_json({"ok": True, "message": "Full reset complete"})
 
     else:
         audio_path      = sys.argv[2]
