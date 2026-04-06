@@ -88,7 +88,7 @@ enum NavItem: String, CaseIterable {
 }
 
 // =========================================================
-// NavigationContentView — no backendClient args anywhere
+// NavigationContentView
 // =========================================================
 
 struct NavigationContentView: View {
@@ -99,7 +99,7 @@ struct NavigationContentView: View {
         Group {
             switch currentNav {
             case .home:
-                HomeView()                                                          // ← no args
+                HomeView()
             case .history:
                 HistoryView(backendClient: AppManager.shared.localBackendClient)
             case .dictionary:
@@ -124,6 +124,16 @@ struct SidebarView: View {
     @State private var selectedLanguage : String  = Config.targetLanguage
     @State private var syncStatus       : String  = ""
     @State private var calendarEmail    : String  = "Not connected"
+
+    // Data-management action states
+    @State private var clearingHistory    : ClearState = .idle
+    @State private var clearingDictionary : ClearState = .idle
+    @State private var clearingSnippets   : ClearState = .idle
+    @State private var resettingProfile   : ClearState = .idle
+
+    // Confirmation alert
+    @State private var pendingClear : DataClearAction? = nil
+    @State private var showClearAlert : Bool = false
 
     private var backendClient: LocalBackendClient { AppManager.shared.localBackendClient }
 
@@ -170,6 +180,7 @@ struct SidebarView: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 0) {
 
+                    // MARK: Hotkeys
                     SettingsSection(title: "Hotkeys") {
                         HotkeyRow(label: "Start", keys: ["⌥", "Space"])
                         HotkeyRow(label: "Stop",  keys: ["⌥", "S"])
@@ -177,6 +188,7 @@ struct SidebarView: View {
 
                     Divider().padding(.vertical, 10)
 
+                    // MARK: Output language
                     SettingsSection(title: "Output language") {
                         Picker("", selection: $selectedLanguage) {
                             ForEach(Config.supportedLanguages, id: \.self) { Text($0).tag($0) }
@@ -198,6 +210,7 @@ struct SidebarView: View {
 
                     Divider().padding(.vertical, 10)
 
+                    // MARK: Google Calendar
                     SettingsSection(title: "Google Calendar") {
                         HStack(spacing: 8) {
                             Circle()
@@ -226,6 +239,70 @@ struct SidebarView: View {
 
                     Divider().padding(.vertical, 10)
 
+                    // MARK: Data Management ──────────────────────────────────
+                    SettingsSection(title: "Data Management") {
+                        VStack(spacing: 5) {
+                            ClearRow(
+                                label:  "Transcription history",
+                                state:  clearingHistory
+                            ) {
+                                armClear(.history)
+                            }
+                            ClearRow(
+                                label:  "Personal dictionary",
+                                state:  clearingDictionary
+                            ) {
+                                armClear(.dictionary)
+                            }
+                            ClearRow(
+                                label:  "Voice snippets",
+                                state:  clearingSnippets
+                            ) {
+                                armClear(.snippets)
+                            }
+                            ClearRow(
+                                label:  "Profile & learned context",
+                                state:  resettingProfile
+                            ) {
+                                armClear(.profile)
+                            }
+
+                            // Reset all — full-width red button
+                            Button {
+                                armClear(.all)
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Image(systemName: "trash")
+                                        .font(.system(size: 10))
+                                    Text("Reset All Data")
+                                        .font(.system(size: 11, weight: .medium))
+                                }
+                                .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .foregroundColor(.red)
+                            .padding(.top, 3)
+                        }
+                    }
+                    // ── Confirmation alert ─────────────────────────────────
+                    .alert(
+                        pendingClear?.alertTitle ?? "Confirm",
+                        isPresented: $showClearAlert,
+                        presenting: pendingClear
+                    ) { action in
+                        Button("Cancel", role: .cancel) { pendingClear = nil }
+                        Button(action.confirmLabel, role: .destructive) {
+                            executeClear(action)
+                            pendingClear = nil
+                        }
+                    } message: { action in
+                        Text(action.alertMessage)
+                    }
+
+                    Divider().padding(.vertical, 10)
+
+                    // MARK: Backend info
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Backend: local Python CLI")
                         Text("Recording: .wav file")
@@ -271,6 +348,10 @@ struct SidebarView: View {
         .onReceive(controller.$selectedNav) { selectedNav = $0 }
     }
 
+    // =========================================================
+    // Calendar helpers (unchanged)
+    // =========================================================
+
     private func loadCalendarEmail() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             backendClient.fetchCalendarEmail { email in
@@ -289,10 +370,183 @@ struct SidebarView: View {
             DispatchQueue.main.async { calendarEmail = "Not connected" }
         }
     }
+
+    // =========================================================
+    // Data-management helpers
+    // =========================================================
+
+    private func armClear(_ action: DataClearAction) {
+        pendingClear  = action
+        showClearAlert = true
+    }
+
+    private func executeClear(_ action: DataClearAction) {
+        switch action {
+        case .history:
+            clearingHistory = .running
+            backendClient.clearHistory { ok in
+                clearingHistory = ok ? .done : .failed
+                resetState(&clearingHistory)
+            }
+        case .dictionary:
+            clearingDictionary = .running
+            backendClient.clearDictionary { ok in
+                clearingDictionary = ok ? .done : .failed
+                resetState(&clearingDictionary)
+            }
+        case .snippets:
+            clearingSnippets = .running
+            backendClient.clearSnippets { ok in
+                clearingSnippets = ok ? .done : .failed
+                resetState(&clearingSnippets)
+            }
+        case .profile:
+            resettingProfile = .running
+            backendClient.resetProfile { ok in
+                resettingProfile = ok ? .done : .failed
+                resetState(&resettingProfile)
+            }
+        case .all:
+            clearingHistory    = .running
+            clearingDictionary = .running
+            clearingSnippets   = .running
+            resettingProfile   = .running
+            backendClient.resetAll { ok in
+                let state: ClearState = ok ? .done : .failed
+                clearingHistory    = state
+                clearingDictionary = state
+                clearingSnippets   = state
+                resettingProfile   = state
+                resetState(&clearingHistory)
+                resetState(&clearingDictionary)
+                resetState(&clearingSnippets)
+                resetState(&resettingProfile)
+            }
+        }
+    }
+
+    private func resetState(_ state: inout ClearState) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            if state == .done || state == .failed { state = .idle }
+        }
+    }
 }
 
 // =========================================================
-// Sidebar sub-components
+// ClearRow — a single data-delete row inside the sidebar
+// =========================================================
+
+private struct ClearRow: View {
+    let label  : String
+    let state  : ClearState
+    let action : () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            // State indicator / label
+            Group {
+                switch state {
+                case .idle:
+                    Text(label)
+                        .font(.system(size: 12))
+                        .foregroundColor(.primary)
+                case .running:
+                    HStack(spacing: 4) {
+                        ProgressView().scaleEffect(0.55)
+                        Text(label)
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                    }
+                case .done:
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundColor(.green)
+                        Text(label)
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                    }
+                case .failed:
+                    HStack(spacing: 4) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 10))
+                            .foregroundColor(.red)
+                        Text(label)
+                            .font(.system(size: 12))
+                            .foregroundColor(.red)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Clear button — only shown when idle or after result
+            Button("Clear") { action() }
+                .buttonStyle(.plain)
+                .font(.system(size: 11))
+                .foregroundColor(.red)
+                .disabled(state == .running)
+                .opacity(state == .running ? 0 : 1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(Color(NSColor.textBackgroundColor))
+        .cornerRadius(6)
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color.secondary.opacity(0.15), lineWidth: 0.5)
+        )
+    }
+}
+
+// =========================================================
+// Supporting enums
+// =========================================================
+
+enum ClearState: Equatable {
+    case idle, running, done, failed
+}
+
+private enum DataClearAction {
+    case history, dictionary, snippets, profile, all
+
+    var alertTitle: String {
+        switch self {
+        case .history:    return "Clear Transcription History?"
+        case .dictionary: return "Clear Personal Dictionary?"
+        case .snippets:   return "Clear Voice Snippets?"
+        case .profile:    return "Reset Profile?"
+        case .all:        return "Reset All Data?"
+        }
+    }
+
+    var alertMessage: String {
+        switch self {
+        case .history:
+            return "All past transcriptions will be permanently deleted."
+        case .dictionary:
+            return "Every custom term and alias will be removed. This cannot be undone."
+        case .snippets:
+            return "All voice snippet shortcuts will be deleted. This cannot be undone."
+        case .profile:
+            return "Your name, organisation, role and AI-learned context will be cleared. Your language preference is kept."
+        case .all:
+            return "History, dictionary, snippets and profile will all be permanently deleted. Your language preference is kept. This cannot be undone."
+        }
+    }
+
+    var confirmLabel: String {
+        switch self {
+        case .history:    return "Clear History"
+        case .dictionary: return "Clear Dictionary"
+        case .snippets:   return "Clear Snippets"
+        case .profile:    return "Reset Profile"
+        case .all:        return "Reset Everything"
+        }
+    }
+}
+
+// =========================================================
+// Sidebar sub-components (unchanged)
 // =========================================================
 
 struct NavRow: View {
