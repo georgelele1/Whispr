@@ -7,7 +7,7 @@ final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
 
     private var recorder: AVAudioRecorder?
     private var tempAudioURL: URL?
-    private let maxRecordingDuration: TimeInterval = 60
+    private let maxRecordingDuration: TimeInterval = 300
 
     func startRecording() throws {
         guard !isRecording else { return }
