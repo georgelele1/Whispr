@@ -113,15 +113,11 @@ struct NavigationContentView: View {
     }
 }
 
-// =========================================================
-// SidebarView
-// =========================================================
-
 struct SidebarView: View {
     let controller: MainWindowController
 
     @State private var selectedNav      : NavItem = .home
-    @State private var selectedLanguage : String  = Config.targetLanguage
+    @State private var selectedLanguage : String  = LanguageManager.shared.current
     @State private var syncStatus       : String  = ""
     @State private var calendarEmail    : String  = "Not connected"
 
@@ -196,15 +192,24 @@ struct SidebarView: View {
                         .pickerStyle(.menu)
                         .labelsHidden()
                         .onChange(of: selectedLanguage) { newValue in
-                            Config.targetLanguage = newValue
+                            LanguageManager.shared.setLanguage(newValue)
+                            MenuBarController.shared.refreshLanguageMenu()
+
                             syncStatus = "Saving..."
                             backendClient.syncLanguageToBackend { success in
-                                syncStatus = success ? "Saved" : "Saved locally"
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { syncStatus = "" }
+                                DispatchQueue.main.async {
+                                    syncStatus = success ? "Saved" : "Saved locally"
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                        syncStatus = ""
+                                    }
+                                }
                             }
                         }
+
                         if !syncStatus.isEmpty {
-                            Text(syncStatus).font(.caption2).foregroundColor(.secondary)
+                            Text(syncStatus)
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
                         }
                     }
 
@@ -222,12 +227,12 @@ struct SidebarView: View {
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                         }
-                        if calendarEmail == "Not connected" || calendarEmail == "Connecting..." {
+                        if calendarEmail == "Not connected" || calendarEmail == "Connecting." {
                             Button("Connect") { connectCalendar() }
                                 .buttonStyle(.borderedProminent)
                                 .controlSize(.small)
                                 .tint(Color(red: 0.498, green: 0.467, blue: 0.867))
-                                .disabled(calendarEmail == "Connecting...")
+                                .disabled(calendarEmail == "Connecting.")
                         } else {
                             HStack(spacing: 6) {
                                 Button("Switch")     { connectCalendar() }.buttonStyle(.bordered).controlSize(.small)
@@ -239,7 +244,7 @@ struct SidebarView: View {
 
                     Divider().padding(.vertical, 10)
 
-                    // MARK: Data Management ──────────────────────────────────
+                    // MARK: Data Management
                     SettingsSection(title: "Data Management") {
                         VStack(spacing: 5) {
                             ClearRow(
@@ -267,7 +272,6 @@ struct SidebarView: View {
                                 armClear(.profile)
                             }
 
-                            // Reset all — full-width red button
                             Button {
                                 armClear(.all)
                             } label: {
@@ -285,7 +289,6 @@ struct SidebarView: View {
                             .padding(.top, 3)
                         }
                     }
-                    // ── Confirmation alert ─────────────────────────────────
                     .alert(
                         pendingClear?.alertTitle ?? "Confirm",
                         isPresented: $showClearAlert,
@@ -336,38 +339,49 @@ struct SidebarView: View {
         .background(Color(NSColor.controlBackgroundColor))
         .onAppear {
             loadCalendarEmail()
+
             backendClient.fetchLanguageFromBackend { lang in
-                if let lang, Config.supportedLanguages.contains(lang) {
-                    DispatchQueue.main.async {
-                        selectedLanguage = lang
-                        Config.targetLanguage = lang
-                    }
+                DispatchQueue.main.async {
+                    LanguageManager.shared.syncFromBackend(lang)
+                    selectedLanguage = LanguageManager.shared.current
+                    MenuBarController.shared.refreshLanguageMenu()
                 }
             }
         }
         .onReceive(controller.$selectedNav) { selectedNav = $0 }
+        .onReceive(LanguageManager.shared.$current) { lang in
+            selectedLanguage = lang
+        }
     }
 
     // =========================================================
-    // Calendar helpers (unchanged)
+    // Calendar helpers
     // =========================================================
 
     private func loadCalendarEmail() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             backendClient.fetchCalendarEmail { email in
-                DispatchQueue.main.async { calendarEmail = email ?? "Not connected" }
+                DispatchQueue.main.async {
+                    calendarEmail = email ?? "Not connected"
+                }
             }
         }
     }
+
     private func connectCalendar() {
-        calendarEmail = "Connecting..."
+        calendarEmail = "Connecting."
         backendClient.connectGoogleCalendar { email in
-            DispatchQueue.main.async { calendarEmail = email ?? "Not connected" }
+            DispatchQueue.main.async {
+                calendarEmail = email ?? "Not connected"
+            }
         }
     }
+
     private func disconnectCalendar() {
         backendClient.disconnectGoogleCalendar { _ in
-            DispatchQueue.main.async { calendarEmail = "Not connected" }
+            DispatchQueue.main.async {
+                calendarEmail = "Not connected"
+            }
         }
     }
 
@@ -376,7 +390,7 @@ struct SidebarView: View {
     // =========================================================
 
     private func armClear(_ action: DataClearAction) {
-        pendingClear  = action
+        pendingClear = action
         showClearAlert = true
     }
 
@@ -407,25 +421,26 @@ struct SidebarView: View {
                 scheduleClearReset { self.resettingProfile = .idle }
             }
         case .all:
-            clearingHistory    = .running
+            clearingHistory = .running
             clearingDictionary = .running
-            clearingSnippets   = .running
-            resettingProfile   = .running
+            clearingSnippets = .running
+            resettingProfile = .running
+
             backendClient.resetAll { [self] ok in
-                let s: ClearState = ok ? .done : .failed
-                clearingHistory    = s
-                clearingDictionary = s
-                clearingSnippets   = s
-                resettingProfile   = s
-                scheduleClearReset { self.clearingHistory    = .idle }
+                let state: ClearState = ok ? .done : .failed
+                clearingHistory = state
+                clearingDictionary = state
+                clearingSnippets = state
+                resettingProfile = state
+
+                scheduleClearReset { self.clearingHistory = .idle }
                 scheduleClearReset { self.clearingDictionary = .idle }
-                scheduleClearReset { self.clearingSnippets   = .idle }
-                scheduleClearReset { self.resettingProfile   = .idle }
+                scheduleClearReset { self.clearingSnippets = .idle }
+                scheduleClearReset { self.resettingProfile = .idle }
             }
         }
     }
 
-    /// Resets a state back to idle after 3 s — avoids inout in escaping closure.
     private func scheduleClearReset(_ reset: @escaping () -> Void) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: reset)
     }

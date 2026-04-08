@@ -33,7 +33,6 @@ final class LocalBackendClient: ObservableObject {
     init() {
         checkBackendAvailability()
 
-        // Auto-update dictionary on launch in background
         if isBackendAvailable {
             DispatchQueue.global(qos: .background).async {
                 self.runDictionaryUpdate { result in
@@ -76,7 +75,7 @@ final class LocalBackendClient: ObservableObject {
         let fm = FileManager.default
         var current = URL(fileURLWithPath: fm.currentDirectoryPath)
 
-        // Walk up from current directory firstCan you explain the redox effect in the chemical industry and give me an example?
+        // Walk up from current directory first
         for _ in 0..<8 {
             let backendCandidate = current.appendingPathComponent("backend/app.py").path
             if fm.fileExists(atPath: backendCandidate) {
@@ -213,7 +212,7 @@ final class LocalBackendClient: ObservableObject {
             return
         }
 
-        let targetLanguage = Config.targetLanguage
+        let targetLanguage = LanguageManager.shared.current
 
         DispatchQueue.global(qos: .userInitiated).async {
             let process = Process()
@@ -225,7 +224,7 @@ final class LocalBackendClient: ObservableObject {
                 "transcribe",
                 fileURL.path,
                 appName.isEmpty ? "unknown" : appName,
-                targetLanguage                          // ← language passed to Python
+                targetLanguage
             ]
 
             let outputPipe = Pipe()
@@ -249,7 +248,6 @@ final class LocalBackendClient: ObservableObject {
                 return
             }
 
-            // Read pipes concurrently while process runs to avoid blocking
             var outputData = Data()
             var errorData  = Data()
             let readGroup  = DispatchGroup()
@@ -346,21 +344,21 @@ final class LocalBackendClient: ObservableObject {
     // Language management
     // =========================================================
 
-    /// Push the current Config.targetLanguage to the Python backend profile.
-    /// Call this after the user changes language in Settings.
     func syncLanguageToBackend(completion: ((Bool) -> Void)? = nil) {
         guard let backendScriptPath else {
             completion?(false)
             return
         }
 
+        let language = LanguageManager.shared.current
+
         runPythonCommand(
             script: backendScriptPath,
-            arguments: ["cli", "set-language", Config.targetLanguage]
+            arguments: ["cli", "set-language", language]
         ) { result in
             switch result {
             case .success:
-                print("Language synced to backend:", Config.targetLanguage)
+                print("Language synced to backend:", language)
                 completion?(true)
             case .failure(let error):
                 print("Language sync failed:", error.localizedDescription)
@@ -369,7 +367,6 @@ final class LocalBackendClient: ObservableObject {
         }
     }
 
-    /// Fetch the language currently stored in the Python backend profile.
     func fetchLanguageFromBackend(completion: @escaping (String?) -> Void) {
         guard let backendScriptPath else {
             completion(nil)
@@ -396,7 +393,6 @@ final class LocalBackendClient: ObservableObject {
     // Google Calendar account management
     // =========================================================
 
-    /// Read the currently saved Google email from the Python tokens directory.
     func fetchCalendarEmail(completion: @escaping (String?) -> Void) {
         guard let backendScriptPath else {
             print("[calendar] backendScriptPath is nil")
@@ -413,7 +409,6 @@ final class LocalBackendClient: ObservableObject {
             switch result {
             case .success(let output):
                 print("[calendar] get-email output: \(output)")
-                // Parse JSON — find the line containing valid JSON
                 let email = output
                     .components(separatedBy: .newlines)
                     .compactMap { line -> String? in
@@ -433,17 +428,13 @@ final class LocalBackendClient: ObservableObject {
         }
     }
 
-    /// Trigger the Python OAuth flow to connect or switch Google account.
-    /// Opens a browser window for the user to approve access.
     func connectGoogleCalendar(completion: @escaping (String?) -> Void) {
         guard let backendScriptPath else { completion(nil); return }
         let calendarScript = URL(fileURLWithPath: backendScriptPath)
             .deletingLastPathComponent().appendingPathComponent("gcalendar.py").path
 
-        runPythonCommand(script: calendarScript, arguments: ["connect"]) { [weak self] result in
+        runPythonCommand(script: calendarScript, arguments: ["connect"]) { [weak self] _ in
             guard let self else { return }
-            // OAuth process finished — now read the saved email from disk
-            // (more reliable than parsing the connect output which may contain stderr noise)
             self.fetchCalendarEmail { email in
                 completion(email)
             }
@@ -517,24 +508,18 @@ final class LocalBackendClient: ObservableObject {
         runPythonCommand(script: script, arguments: ["cli", "list"]) { result in
             guard case .success(let output) = result else { completion([]); return }
 
-            // Helper to extract terms from any known JSON structure
             func extractTerms(_ json: [String: Any]) -> [[String: Any]]? {
-                // {"terms": [...]}
                 if let terms = json["terms"] as? [[String: Any]] { return terms }
-                // {"output": {"terms": [...]}}
                 if let out   = json["output"] as? [String: Any],
                    let terms = out["terms"]   as? [[String: Any]] { return terms }
-                // {"output": {"dictionary": {"terms": [...]}}}
                 if let out   = json["output"]      as? [String: Any],
                    let dict  = out["dictionary"]   as? [String: Any],
                    let terms = dict["terms"]       as? [[String: Any]] { return terms }
-                // {"dictionary": {"terms": [...]}}
                 if let dict  = json["dictionary"]  as? [String: Any],
                    let terms = dict["terms"]       as? [[String: Any]] { return terms }
                 return nil
             }
 
-            // Try single-line JSON first (each line is a complete JSON object)
             for line in output.components(separatedBy: .newlines) {
                 let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard trimmed.hasPrefix("{"),
@@ -546,7 +531,6 @@ final class LocalBackendClient: ObservableObject {
                 return
             }
 
-            // Try full output as multi-line JSON (pretty-printed)
             let fullOutput = output.trimmingCharacters(in: .whitespacesAndNewlines)
             if let data  = fullOutput.data(using: .utf8),
                let json  = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

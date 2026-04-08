@@ -79,16 +79,20 @@ final class MenuBarController: NSObject {
 
         // ── Language submenu ──────────────────────────────────
         let languageMenu = NSMenu()
+        languageMenuItems.removeAll()
+
         for lang in Config.supportedLanguages {
             let item = NSMenuItem(title: lang, action: #selector(selectLanguage(_:)), keyEquivalent: "")
             item.target = self
-            item.state  = (lang == Config.targetLanguage) ? .on : .off
             languageMenu.addItem(item)
             languageMenuItems.append(item)
         }
+
         let languageParent = NSMenuItem(title: "Output Language", action: nil, keyEquivalent: "")
         languageParent.submenu = languageMenu
         menu.addItem(languageParent)
+
+        refreshLanguageMenu()
 
         // ── Dictionary update ─────────────────────────────────
         let updateDictItem = NSMenuItem(title: "Update Dictionary", action: #selector(updateDictionary), keyEquivalent: "d")
@@ -128,7 +132,9 @@ final class MenuBarController: NSObject {
 
         AppManager.shared.$currentActiveApp
             .receive(on: DispatchQueue.main)
-            .sink { appName in currentAppItem.title = "Current App: \(appName)" }
+            .sink { appName in
+                currentAppItem.title = "Current App: \(appName)"
+            }
             .store(in: &cancellables)
 
         AppManager.shared.$lastOutputText
@@ -140,17 +146,33 @@ final class MenuBarController: NSObject {
             }
             .store(in: &cancellables)
 
+        LanguageManager.shared.$current
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.refreshLanguageMenu()
+            }
+            .store(in: &cancellables)
+
         statusItem.menu = menu
         refreshCalendarLabel()
     }
 
     // MARK: - Language
 
+    func refreshLanguageMenu() {
+        let lang = LanguageManager.shared.current
+        languageMenuItems.forEach { item in
+            item.state = (item.title == lang) ? .on : .off
+        }
+    }
+
     @objc private func selectLanguage(_ sender: NSMenuItem) {
         let lang = sender.title
         guard Config.supportedLanguages.contains(lang) else { return }
-        Config.targetLanguage = lang
-        languageMenuItems.forEach { $0.state = ($0.title == lang) ? .on : .off }
+
+        LanguageManager.shared.setLanguage(lang)
+        refreshLanguageMenu()
+
         backendClient.syncLanguageToBackend { _ in }
     }
 
@@ -159,14 +181,14 @@ final class MenuBarController: NSObject {
     @objc private func toggleCalendar() {
         let isConnected = calendarMenuItem?.title.hasPrefix("Disconnect") ?? false
         if isConnected {
-            calendarMenuItem?.title = "Disconnecting..."
+            calendarMenuItem?.title = "Disconnecting."
             backendClient.disconnectGoogleCalendar { [weak self] _ in
                 DispatchQueue.main.async {
                     self?.calendarMenuItem?.title = "Connect Google Calendar"
                 }
             }
         } else {
-            calendarMenuItem?.title = "Connecting..."
+            calendarMenuItem?.title = "Connecting."
             backendClient.connectGoogleCalendar { [weak self] email in
                 DispatchQueue.main.async {
                     if let email {

@@ -7,12 +7,6 @@ Provides get_user_context() which returns the cached string in 0ms.
 """
 from __future__ import annotations
 
-import sys as _sys
-from pathlib import Path as _Path
-_backend_root = str(_Path(__file__).resolve().parents[2])
-if _backend_root not in _sys.path:
-    _sys.path.insert(0, _backend_root)
-
 import io as _io
 import sys
 import threading
@@ -94,8 +88,6 @@ def _build_user_context() -> str:
     if lang and lang != "English":
         parts.append(f"Output language: {lang}.")
 
-    # Auto-learned description — generated from usage history
-    # Merged with manual fields: adds behavioural context the user didn't manually specify
     description = learned.get("description", "").strip()
     if description:
         parts.append(description)
@@ -118,19 +110,36 @@ def _build_user_context() -> str:
         if labels:
             parts.append(f"Text insertion shortcuts: {'; '.join(labels)}.")
 
-    # Use raw_text (what user said) not final_text (which includes
-    # plugin responses, calendar data, knowledge answers etc.)
-    _SKIP = {"i can help", "no google calendar", "could not fetch", "schedule for"}
+    # ── Recent speech — time-bounded, current session context ───────────────
+    # Only include dictations from the last 2 hours so the refiner knows
+    # what topic the user is currently working on, not month-old content.
+    # Beyond 2h it's no longer "recent" — the learned habits cover long-term.
+    import time as _time
+    TWO_HOURS_MS = 2 * 60 * 60 * 1000
+    now_ms       = int(_time.time() * 1000)
+
+    _SKIP = {"i can help", "no google calendar", "could not fetch", "schedule for",
+             "your calendar is clear", "no events found", "could not fetch"}
     recent_raw = []
-    for item in reversed(load_history().get("items", [])[-20:]):
+    for item in reversed(load_history().get("items", [])[-50:]):
+        # Skip if older than 2 hours
+        ts = item.get("ts", 0)
+        if (now_ms - ts) > TWO_HOURS_MS:
+            break  # items are newest-first after reverse, so stop here
         raw = str(item.get("raw_text", "")).strip()
-        if not raw or len(raw.split()) < 3:
+        if not raw:
+            continue
+        # CJK-aware minimum length
+        import re as _re2
+        _is_cjk = bool(_re2.search(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", raw))
+        if (_is_cjk and len(raw) < 4) or (not _is_cjk and len(raw.split()) < 3):
             continue
         if any(s in raw.lower() for s in _SKIP):
             continue
         recent_raw.append(raw[:80])
         if len(recent_raw) >= 5:
             break
+
     if recent_raw:
         parts.append(f"Recent speech: {' | '.join(recent_raw)}.")
 
@@ -171,10 +180,17 @@ def update_profile_from_history() -> None:
     try:
         items = load_history().get("items", [])[-50:]
         # Use raw_text so the LLM learns from what user said, not plugin output
+        def _text_len(t: str) -> int:
+            """CJK-aware length: count chars for CJK, words for Latin."""
+            import re as _re
+            if _re.search(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", t):
+                return len(t.strip())  # Chinese has no spaces — count chars
+            return len(t.split())      # Latin — count words
+
         texts = [
             str(i.get("raw_text", "") or i.get("final_text", "")).strip()
             for i in items
-            if len(str(i.get("raw_text", "") or i.get("final_text", "")).split()) >= 3
+            if _text_len(str(i.get("raw_text", "") or i.get("final_text", "")).strip()) >= 4
         ]
         texts = [t for t in texts if t]
         if len(texts) < 5:
@@ -184,6 +200,7 @@ def update_profile_from_history() -> None:
         prompt_input = (
             f"Transcription samples ({len(texts[-30:])} entries):\n{sample}\n\n"
             "Analyse these voice dictations and extract behavioural patterns only. "
+            "Input may be multilingual (English, Chinese, or mixed) — analyse all languages. "
             "No names, no emails, no personal identifiers. Focus on:\n"
             "1. Professional domain and topics\n"
             "2. What they use voice dictation for\n"
@@ -197,7 +214,7 @@ def update_profile_from_history() -> None:
 
         # Structured JSON extraction — fast model is sufficient
         agent = Agent(
-            model="gpt-5.4",
+            model="gpt-4o-mini",
             name="whispr_profile_learner",
             system_prompt=(
                 "You are a usage-pattern analyser for a voice transcription app. "
