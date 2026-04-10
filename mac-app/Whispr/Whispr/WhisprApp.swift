@@ -3,21 +3,12 @@ import AppKit
 import AVFoundation
 import Combine
 
-// =========================================================
-// WhisprApp
-// Entry point. Settings are now embedded in the sidebar so
-// we no longer need a separate Settings scene.
-// All other launch logic is unchanged from baseline.
-// =========================================================
-
 @main
 struct WhisprApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        Settings {
-            EmptyView()
-        }
+        Settings { EmptyView() }
     }
 }
 
@@ -29,7 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
 
         let appManager = AppManager.shared
-        appManager.initialize()
+        appManager.initialize()           // launches backend server
         appManager.updateAppStatus(.idle)
 
         appManager.localBackendClient.$isBackendAvailable
@@ -37,16 +28,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { isAvailable in
                 if !isAvailable {
                     appManager.updateAppStatus(.error)
-                    NSLog("Python backend script is not accessible")
+                    NSLog("Whispr backend is not available")
                 }
             }
             .store(in: &cancellables)
 
         AVCaptureDevice.requestAccess(for: .audio) { granted in
             if !granted {
-                DispatchQueue.main.async {
-                    appManager.showPermissionAlert()
-                }
+                DispatchQueue.main.async { appManager.showPermissionAlert() }
             }
         }
 
@@ -59,12 +48,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Show onboarding on first launch
-        AppManager.shared.localBackendClient.isFirstLaunch { isFirst in
-            if isFirst {
-                self.showOnboarding()
-            }
+        appManager.localBackendClient.isFirstLaunch { isFirst in
+            if isFirst { self.showOnboarding() }
         }
     }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        AppManager.shared.audioRecorder.stopRecording()
+        AppManager.shared.stopBackendServer()   // clean shutdown
+    }
+
+    // =========================================================
+    // Onboarding (unchanged)
+    // =========================================================
 
     private func showOnboarding() {
         let host = NSHostingController(rootView: OnboardingView {
@@ -80,7 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         win.title = "Welcome to Whispr"
         win.contentViewController = host
-        win.titlebarAppearsTransparent = true
+        win.titlebarAppearsTransparent  = true
         win.isMovableByWindowBackground = true
         win.isReleasedWhenClosed = false
         win.center()
@@ -90,8 +86,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var onboardingWindow: NSWindow?
-
-    func applicationWillTerminate(_ notification: Notification) {
-        AppManager.shared.audioRecorder.stopRecording()
-    }
 }
