@@ -214,7 +214,7 @@ def update_profile_from_history() -> None:
 
         # Structured JSON extraction — fast model is sufficient
         agent = Agent(
-            model="gpt-4o-mini",
+            model="gpt-5.4",
             name="whispr_profile_learner",
             system_prompt=(
                 "You are a usage-pattern analyser for a voice transcription app. "
