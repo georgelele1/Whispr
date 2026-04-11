@@ -23,6 +23,7 @@ DerivedData/
 build/
 xcuserdata/
 *.xcuserstate
+mac-app/Whispr/Whispr.xcodeproj/xcshareddata/xcschemes/Whispr.xcscheme
 
 #json
 *.json
