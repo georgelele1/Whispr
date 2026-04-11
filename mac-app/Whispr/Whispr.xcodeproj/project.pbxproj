@@ -146,7 +146,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\necho \"SRCROOT = ${SRCROOT}\"\necho \"Backend src = ${SRCROOT}/Whispr/backend\"\n\nBACKEND_SRC=\"${SRCROOT}/Whispr/backend\"\nBACKEND_DST=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources/backend\"\nFRAMEWORKS_DST=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Frameworks\"\n\n# Copy backend binary + _internal\nmkdir -p \"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources\"\nrm -rf \"$BACKEND_DST\"\ncp -R \"$BACKEND_SRC\" \"$BACKEND_DST\"\n\n# Copy required dylibs\nmkdir -p \"$FRAMEWORKS_DST\"\nPYTHON_LIB=\"/Library/Frameworks/Python.framework/Versions/3.10/lib\"\nfor lib in libssl.1.1.dylib libcrypto.1.1.dylib libncursesw.5.dylib; do\n    if [ -f \"${PYTHON_LIB}/${lib}\" ]; then\n        cp \"${PYTHON_LIB}/${lib}\" \"$FRAMEWORKS_DST/\"\n        echo \"Copied ${lib}\"\n    fi\ndone\n\necho \"Backend copied successfully\"\n";
+			shellScript = "set -e\n\nBACKEND_SRC=\"${SRCROOT}/Whispr/backend\"\nBACKEND_DST=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources/backend\"\n\nmkdir -p \"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources\"\nrm -rf \"$BACKEND_DST\"\ncp -R \"$BACKEND_SRC\" \"$BACKEND_DST\"\n\nfind \"$BACKEND_DST\" -name \"__pycache__\" -exec rm -rf {} + 2>/dev/null || true\nfind \"$BACKEND_DST\" -name \"*.pyc\" -delete 2>/dev/null || true\nrm -rf \"$BACKEND_DST/.co\" 2>/dev/null || true\nrm -f \"$BACKEND_DST/.env\" 2>/dev/null || true\nrm -f \"$BACKEND_DST/credentials.json\" 2>/dev/null || true\nrm -f \"$BACKEND_DST/token.json\" 2>/dev/null || true\n\necho \"Backend copied successfully to $BACKEND_DST\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

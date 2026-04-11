@@ -1,0 +1,34 @@
+# Whispr backend dependencies
+# Auto-installed on first launch via run.sh
+# connectonion is bundled directly — not listed here
+
+# connectonion dependencies
+anthropic>=0.18.0
+beautifulsoup4>=4.12.0
+click>=8.0.0
+httpx>=0.24.0
+ifaddr>=0.2.0
+litellm>=1.0.0
+mnemonic>=0.20
+openai>=1.0.0
+pydantic>=2.0.0
+pyjwt>=2.0.0
+pynacl>=1.5.0
+python-dotenv>=1.0.0
+pyyaml>=6.0.0
+requests>=2.25.0
+rich>=13.0.0
+toml>=0.10.2
+typer>=0.20.0
+uvicorn>=0.20.0
+websockets>=11.0.0
+
+# Google Calendar (used by gcalendar.py)
+google-api-python-client>=2.0.0
+google-auth>=2.0.0
+google-auth-oauthlib>=1.0.0
+google-auth-httplib2>=0.1.0
+
+# Whisper / audio transcription (used by connectonion.transcribe)
+openai-whisper>=20230918
+tiktoken>=0.12.0

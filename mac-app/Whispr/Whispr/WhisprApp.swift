@@ -55,7 +55,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         AppManager.shared.audioRecorder.stopRecording()
-        AppManager.shared.stopBackendServer()   // clean shutdown
     }
 
     // =========================================================
