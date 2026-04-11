@@ -146,7 +146,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\n\nBACKEND_SRC=\"${SRCROOT}/../backend\"\nBACKEND_DST=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources/backend\"\n\nmkdir -p \"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources\"\nrm -rf \"$BACKEND_DST\"\ncp -R \"$BACKEND_SRC\" \"$BACKEND_DST\"\n\nfind \"$BACKEND_DST\" -name \"__pycache__\" -exec rm -rf {} + 2>/dev/null || true\nfind \"$BACKEND_DST\" -name \"*.pyc\" -delete 2>/dev/null || true\nrm -rf \"$BACKEND_DST/.co\" 2>/dev/null || true\nrm -f \"$BACKEND_DST/.env\" 2>/dev/null || true\nrm -f \"$BACKEND_DST/credentials.json\" 2>/dev/null || true\nrm -f \"$BACKEND_DST/token.json\" 2>/dev/null || true\n\necho \"Backend copied from ${BACKEND_SRC}\"\necho \"Backend copied to ${BACKEND_DST}\"\n";
+			shellScript = "set -e\n\nBACKEND_SRC=\"${SRCROOT}/../backend\"\nBACKEND_DST=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources/backend\"\n\nif [ ! -d \"${BACKEND_SRC}\" ]; then\n  echo \"Backend source folder not found: ${BACKEND_SRC}\"\n  exit 1\nfi\n\nrm -rf \"${BACKEND_DST}\"\nmkdir -p \"${BACKEND_DST}\"\n\ncp -R \"${BACKEND_SRC}/.\" \"${BACKEND_DST}/\"\n\nfind \"${BACKEND_DST}\" -name \"__pycache__\" -exec rm -rf {} + 2>/dev/null || true\nfind \"${BACKEND_DST}\" -name \"*.pyc\" -delete 2>/dev/null || true\nrm -rf \"${BACKEND_DST}/.co\" 2>/dev/null || true\nrm -f \"${BACKEND_DST}/.env\" 2>/dev/null || true\nrm -f \"${BACKEND_DST}/credentials.json\" 2>/dev/null || true\nrm -f \"${BACKEND_DST}/token.json\" 2>/dev/null || true\n\necho \"Backend copied from ${BACKEND_SRC}\"\necho \"Backend copied to ${BACKEND_DST}\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
