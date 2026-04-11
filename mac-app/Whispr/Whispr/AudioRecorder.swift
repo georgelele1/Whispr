@@ -9,56 +9,50 @@ final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
     private var tempAudioURL: URL?
     private let maxRecordingDuration: TimeInterval = 300
 
-    func startRecording() throws {
+    func startRecording() {
         guard !isRecording else { return }
 
-        let tempDir = FileManager.default.temporaryDirectory
-        let fileName = "whispr_recording_\(UUID().uuidString).wav"
-        let url = tempDir.appendingPathComponent(fileName)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("whispr_recording_\(UUID().uuidString).wav")
         tempAudioURL = url
 
         let settings: [String: Any] = [
-            AVFormatIDKey: kAudioFormatLinearPCM,
-            AVSampleRateKey: 16000.0,
-            AVNumberOfChannelsKey: 1,
-            AVLinearPCMBitDepthKey: 16,
-            AVLinearPCMIsBigEndianKey: false,
-            AVLinearPCMIsFloatKey: false
+            AVFormatIDKey:              kAudioFormatLinearPCM,
+            AVSampleRateKey:            16000.0,
+            AVNumberOfChannelsKey:      1,
+            AVLinearPCMBitDepthKey:     16,
+            AVLinearPCMIsBigEndianKey:  false,
+            AVLinearPCMIsFloatKey:      false
         ]
 
-        recorder = try AVAudioRecorder(url: url, settings: settings)
-        recorder?.delegate = self
-        recorder?.isMeteringEnabled = true
-
-        guard recorder?.record(forDuration: maxRecordingDuration) == true else {
-            throw NSError(
-                domain: "AudioRecorder",
-                code: -1,
-                userInfo: [NSLocalizedDescriptionKey: "Could not start recording"]
-            )
+        guard
+            let rec = try? AVAudioRecorder(url: url, settings: settings),
+            rec.record(forDuration: maxRecordingDuration)
+        else {
+            AppManager.shared.showErrorAlert(message: "Could not start recording")
+            return
         }
 
+        rec.delegate = self
+        rec.isMeteringEnabled = true
+        recorder = rec
         isRecording = true
-        NSLog("Started recording: \(url.path)")
     }
 
     func stopRecording() -> URL? {
         guard isRecording else { return nil }
-
         recorder?.stop()
         isRecording = false
-        NSLog("Stopped recording")
-
         return tempAudioURL
     }
 
     func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
-        if !flag {
-            AppManager.shared.showErrorAlert(message: "Recording failed to finish successfully")
-            tempAudioURL = nil
-        }
         isRecording = false
-        AppManager.shared.floatingIndicator.hideIndicator()
+        if !flag {
+            tempAudioURL = nil
+            FloatingStatusButton.shared.update(.error)
+            AppManager.shared.showErrorAlert(message: "Recording failed to finish successfully")
+        }
     }
 
     func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: Error?) {

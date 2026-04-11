@@ -2,23 +2,7 @@ import AppKit
 import SwiftUI
 import Combine
 
-// =========================================================
-// MenuBarController
-// Tray menu:
-//   Status / Current App / Last Result  (read-only)
-//   Start Recording  ⌘R
-//   Stop Recording   ⌘S
-//   ────────────────
-//   Output Language  ▶ submenu
-//   Update Dictionary  ⌘D
-//   Connect / Disconnect Google Calendar
-//   ────────────────
-//   Open Whispr  ⌘O
-//   ────────────────
-//   Quit Whispr  ⌘Q
-// =========================================================
-
-final class MenuBarController: NSObject {
+final class MenuBarController: NSObject, NSMenuDelegate {
     static let shared = MenuBarController()
 
     private let statusItem: NSStatusItem
@@ -55,7 +39,7 @@ final class MenuBarController: NSObject {
     private func setupMenu() {
         let menu = NSMenu()
 
-        // ── Read-only status info ─────────────────────────────
+        // ── Status info (read-only) ───────────────────────────
         let statusMenuItem = NSMenuItem(title: "Status: Idle", action: nil, keyEquivalent: "")
         let currentAppItem = NSMenuItem(title: "Current App: Unknown", action: nil, keyEquivalent: "")
         let lastResultItem = NSMenuItem(title: "Last Result: No transcription yet", action: nil, keyEquivalent: "")
@@ -77,24 +61,21 @@ final class MenuBarController: NSObject {
         menu.addItem(stopItem)
         menu.addItem(.separator())
 
-        // ── Language submenu ──────────────────────────────────
+        // ── Output language submenu ───────────────────────────
         let languageMenu = NSMenu()
         languageMenuItems.removeAll()
-
         for lang in Config.supportedLanguages {
             let item = NSMenuItem(title: lang, action: #selector(selectLanguage(_:)), keyEquivalent: "")
             item.target = self
             languageMenu.addItem(item)
             languageMenuItems.append(item)
         }
-
         let languageParent = NSMenuItem(title: "Output Language", action: nil, keyEquivalent: "")
         languageParent.submenu = languageMenu
         menu.addItem(languageParent)
-
         refreshLanguageMenu()
 
-        // ── Dictionary update ─────────────────────────────────
+        // ── Dictionary ────────────────────────────────────────
         let updateDictItem = NSMenuItem(title: "Update Dictionary", action: #selector(updateDictionary), keyEquivalent: "d")
         updateDictItem.target = self
         menu.addItem(updateDictItem)
@@ -106,13 +87,12 @@ final class MenuBarController: NSObject {
         calendarMenuItem = calItem
         menu.addItem(.separator())
 
-        // ── Open main window only ─────────────────────────────
+        // ── Open / Quit ───────────────────────────────────────
         let openItem = NSMenuItem(title: "Open Whispr", action: #selector(openMainWindow), keyEquivalent: "o")
         openItem.target = self
         menu.addItem(openItem)
         menu.addItem(.separator())
 
-        // ── Quit ──────────────────────────────────────────────
         let quitItem = NSMenuItem(title: "Quit Whispr", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
@@ -148,31 +128,31 @@ final class MenuBarController: NSObject {
 
         LanguageManager.shared.$current
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.refreshLanguageMenu()
-            }
+            .sink { [weak self] _ in self?.refreshLanguageMenu() }
             .store(in: &cancellables)
 
         statusItem.menu = menu
+        menu.delegate = self
         refreshCalendarLabel()
+    }
+
+    // Capture the frontmost app before the menu steals focus,
+    // so paste always targets the right window.
+    func menuWillOpen(_ menu: NSMenu) {
+        AppManager.shared.detectCurrentApp()
     }
 
     // MARK: - Language
 
     func refreshLanguageMenu() {
         let lang = LanguageManager.shared.current
-        languageMenuItems.forEach { item in
-            item.state = (item.title == lang) ? .on : .off
-        }
+        languageMenuItems.forEach { $0.state = ($0.title == lang) ? .on : .off }
     }
 
     @objc private func selectLanguage(_ sender: NSMenuItem) {
-        let lang = sender.title
-        guard Config.supportedLanguages.contains(lang) else { return }
-
-        LanguageManager.shared.setLanguage(lang)
+        guard Config.supportedLanguages.contains(sender.title) else { return }
+        LanguageManager.shared.setLanguage(sender.title)
         refreshLanguageMenu()
-
         backendClient.syncLanguageToBackend { _ in }
     }
 
@@ -181,14 +161,14 @@ final class MenuBarController: NSObject {
     @objc private func toggleCalendar() {
         let isConnected = calendarMenuItem?.title.hasPrefix("Disconnect") ?? false
         if isConnected {
-            calendarMenuItem?.title = "Disconnecting."
+            calendarMenuItem?.title = "Disconnecting…"
             backendClient.disconnectGoogleCalendar { [weak self] _ in
                 DispatchQueue.main.async {
                     self?.calendarMenuItem?.title = "Connect Google Calendar"
                 }
             }
         } else {
-            calendarMenuItem?.title = "Connecting."
+            calendarMenuItem?.title = "Connecting…"
             backendClient.connectGoogleCalendar { [weak self] email in
                 DispatchQueue.main.async {
                     if let email {
@@ -215,9 +195,9 @@ final class MenuBarController: NSObject {
 
     // MARK: - Actions
 
-    @objc private func updateDictionary()  { AppManager.shared.updateDictionary() }
-    @objc private func startRecording()    { AppManager.shared.startRecordingFromMenu() }
-    @objc private func stopRecording()     { AppManager.shared.stopRecordingAndProcess() }
-    @objc private func openMainWindow()    { MainWindowController.shared.navigate(to: .home) }
-    @objc private func quitApp()           { NSApp.terminate(nil) }
+    @objc private func updateDictionary() { AppManager.shared.updateDictionary() }
+    @objc private func startRecording()   { AppManager.shared.startRecording() }
+    @objc private func stopRecording()    { AppManager.shared.stopRecordingAndProcess() }
+    @objc private func openMainWindow()   { MainWindowController.shared.navigate(to: .home) }
+    @objc private func quitApp()          { NSApp.terminate(nil) }
 }
