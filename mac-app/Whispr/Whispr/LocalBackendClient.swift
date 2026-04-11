@@ -54,33 +54,26 @@ final class LocalBackendClient: ObservableObject {
     // =========================================================
 
     private func checkBackendAvailability() {
-        let fm = FileManager.default
+        let runtime = RuntimeBootstrapper.shared
 
-        // ── Python: find from bundle run.sh first, then system candidates ──
-        let pythonCandidates = [
-            "/Users/\(NSUserName())/opt/anaconda3/bin/python3",
-            "/Users/\(NSUserName())/opt/anaconda3/bin/python3.11",
-            "/opt/homebrew/bin/python3",
-            "/opt/homebrew/bin/python3.11",
-            "/usr/local/bin/python3",
-            "/usr/bin/python3",
-        ]
-        pythonPath = pythonCandidates.first { fm.fileExists(atPath: $0) }
+        pythonPath = runtime.bundledPythonURL?.path
+        backendScriptPath = runtime.backendRuntimeURL.appendingPathComponent("app.py").path
 
-        // ── Backend: resolve from app bundle Resources/backend/app.py ──
-        if let resourcesURL = Bundle.main.resourceURL {
-            let candidate = resourcesURL
-                .appendingPathComponent("backend")
-                .appendingPathComponent("app.py").path
-            if fm.fileExists(atPath: candidate) {
-                backendScriptPath = candidate
-            }
+        if let pythonPath, !FileManager.default.fileExists(atPath: pythonPath) {
+            self.pythonPath = nil
+        }
+        if let backendScriptPath, !FileManager.default.fileExists(atPath: backendScriptPath) {
+            self.backendScriptPath = nil
         }
 
-        NSLog("python path = %@", pythonPath ?? "nil")
-        NSLog("backend path = %@", backendScriptPath ?? "nil")
+        print("python path =", self.pythonPath ?? "nil")
+        print("backend path =", self.backendScriptPath ?? "nil")
 
-        isBackendAvailable = (pythonPath != nil && backendScriptPath != nil)
+        isBackendAvailable = (self.pythonPath != nil && self.backendScriptPath != nil)
+    }
+
+    func refreshRuntimePaths() {
+        checkBackendAvailability()
     }
 
     // =========================================================
@@ -94,7 +87,8 @@ final class LocalBackendClient: ObservableObject {
     ) {
         guard let pythonPath else {
             completion(.failure(NSError(
-                domain: "LocalBackendClient", code: -1,
+                domain: "LocalBackendClient",
+                code: -1,
                 userInfo: [NSLocalizedDescriptionKey: "Python not found"]
             )))
             return
@@ -105,6 +99,7 @@ final class LocalBackendClient: ObservableObject {
             process.currentDirectoryURL = URL(fileURLWithPath: script).deletingLastPathComponent()
             process.executableURL = URL(fileURLWithPath: pythonPath)
             process.arguments = [script] + arguments
+            process.environment = ProcessInfo.processInfo.environment
 
             let outputPipe = Pipe()
             let errorPipe  = Pipe()
@@ -144,7 +139,8 @@ final class LocalBackendClient: ObservableObject {
     func runDictionaryUpdate(completion: @escaping (Result<DictionaryUpdateResult, Error>) -> Void) {
         guard let backendScriptPath else {
             completion(.failure(NSError(
-                domain: "LocalBackendClient", code: -1,
+                domain: "LocalBackendClient",
+                code: -1,
                 userInfo: [NSLocalizedDescriptionKey: "Backend script not found"]
             )))
             return
@@ -157,7 +153,8 @@ final class LocalBackendClient: ObservableObject {
 
         guard FileManager.default.fileExists(atPath: dictionaryScriptPath) else {
             completion(.failure(NSError(
-                domain: "LocalBackendClient", code: -1,
+                domain: "LocalBackendClient",
+                code: -1,
                 userInfo: [NSLocalizedDescriptionKey: "dictionary_agent.py not found"]
             )))
             return
@@ -199,7 +196,8 @@ final class LocalBackendClient: ObservableObject {
     ) {
         guard let pythonPath, let backendScriptPath else {
             completion(.failure(NSError(
-                domain: "LocalBackendClient", code: -1,
+                domain: "LocalBackendClient",
+                code: -1,
                 userInfo: [NSLocalizedDescriptionKey: "Python or backend script not found"]
             )))
             return
@@ -219,6 +217,7 @@ final class LocalBackendClient: ObservableObject {
                 appName.isEmpty ? "unknown" : appName,
                 targetLanguage
             ]
+            process.environment = ProcessInfo.processInfo.environment
 
             let outputPipe = Pipe()
             let errorPipe  = Pipe()
@@ -264,7 +263,8 @@ final class LocalBackendClient: ObservableObject {
                 process.terminate()
                 DispatchQueue.main.async {
                     completion(.failure(NSError(
-                        domain: "LocalBackendClient", code: -2,
+                        domain: "LocalBackendClient",
+                        code: -2,
                         userInfo: [NSLocalizedDescriptionKey: "Transcription timed out"]
                     )))
                 }
@@ -283,7 +283,8 @@ final class LocalBackendClient: ObservableObject {
 
                 guard !trimmed.isEmpty else {
                     completion(.failure(NSError(
-                        domain: "LocalBackendClient", code: -4,
+                        domain: "LocalBackendClient",
+                        code: -4,
                         userInfo: [NSLocalizedDescriptionKey: "No output from backend"]
                     )))
                     return
@@ -296,7 +297,8 @@ final class LocalBackendClient: ObservableObject {
 
                 guard let jsonLine = lines.last(where: { $0.hasPrefix("{") && $0.hasSuffix("}") }) else {
                     completion(.failure(NSError(
-                        domain: "LocalBackendClient", code: -6,
+                        domain: "LocalBackendClient",
+                        code: -6,
                         userInfo: [NSLocalizedDescriptionKey: "No JSON in backend output: \(trimmed)"]
                     )))
                     return
@@ -304,7 +306,8 @@ final class LocalBackendClient: ObservableObject {
 
                 guard let data = jsonLine.data(using: .utf8) else {
                     completion(.failure(NSError(
-                        domain: "LocalBackendClient", code: -7,
+                        domain: "LocalBackendClient",
+                        code: -7,
                         userInfo: [NSLocalizedDescriptionKey: "Failed to encode JSON line"]
                     )))
                     return
@@ -325,7 +328,8 @@ final class LocalBackendClient: ObservableObject {
                     }
                 } catch {
                     completion(.failure(NSError(
-                        domain: "LocalBackendClient", code: -8,
+                        domain: "LocalBackendClient",
+                        code: -8,
                         userInfo: [NSLocalizedDescriptionKey: "Invalid JSON: \(jsonLine)"]
                     )))
                 }
@@ -424,7 +428,8 @@ final class LocalBackendClient: ObservableObject {
     func connectGoogleCalendar(completion: @escaping (String?) -> Void) {
         guard let backendScriptPath else { completion(nil); return }
         let calendarScript = URL(fileURLWithPath: backendScriptPath)
-            .deletingLastPathComponent().appendingPathComponent("gcalendar.py").path
+            .deletingLastPathComponent()
+            .appendingPathComponent("gcalendar.py").path
 
         runPythonCommand(script: calendarScript, arguments: ["connect"]) { [weak self] _ in
             guard let self else { return }
@@ -437,7 +442,8 @@ final class LocalBackendClient: ObservableObject {
     func disconnectGoogleCalendar(completion: @escaping (Bool) -> Void) {
         guard let backendScriptPath else { completion(false); return }
         let calendarScript = URL(fileURLWithPath: backendScriptPath)
-            .deletingLastPathComponent().appendingPathComponent("gcalendar.py").path
+            .deletingLastPathComponent()
+            .appendingPathComponent("gcalendar.py").path
         runPythonCommand(script: calendarScript, arguments: ["disconnect"]) { result in
             if case .success = result { completion(true) } else { completion(false) }
         }
