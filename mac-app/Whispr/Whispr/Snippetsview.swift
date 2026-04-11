@@ -1,19 +1,11 @@
 import SwiftUI
 
-// =========================================================
-// Data model
-// =========================================================
-
 struct SnippetEntry: Identifiable {
     let id        = UUID()
     var trigger   : String
     var expansion : String
     var enabled   : Bool
 }
-
-// =========================================================
-// Snippets window
-// =========================================================
 
 struct SnippetsView: View {
 
@@ -29,49 +21,37 @@ struct SnippetsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
 
-            // ── Header ────────────────────────────────────────
+            // Header
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Voice Snippets")
-                        .font(.title2)
-                        .bold()
+                    Text("Voice Snippets").font(.title2).bold()
                     Text("Say the trigger word during dictation to insert the expansion.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .font(.caption).foregroundColor(.secondary)
                 }
                 Spacer()
-                if isLoading {
-                    ProgressView().scaleEffect(0.8)
-                }
+                if isLoading { ProgressView().scaleEffect(0.8) }
             }
             .padding()
 
             Divider()
 
-            // ── Snippet list ──────────────────────────────────
             if snippets.isEmpty && !isLoading {
                 VStack(spacing: 8) {
-                    Image(systemName: "text.bubble")
-                        .font(.system(size: 36))
-                        .foregroundColor(.secondary)
-                    Text("No snippets yet.")
-                        .foregroundColor(.secondary)
-                    Text("Add your first snippet below.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    Image(systemName: "text.bubble").font(.system(size: 36)).foregroundColor(.secondary)
+                    Text("No snippets yet.").foregroundColor(.secondary)
+                    Text("Add your first snippet below.").font(.caption).foregroundColor(.secondary)
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 40)
+                .frame(maxWidth: .infinity).padding(.vertical, 40)
             } else {
                 List {
                     ForEach(snippets) { snippet in
                         SnippetRow(
-                            snippet:    snippet,
-                            isEditing:  editingID == snippet.id,
-                            onEdit:     { editingID = snippet.id },
-                            onSave:     { newTrigger, newExp in saveEdit(snippet, trigger: newTrigger, expansion: newExp) },
-                            onCancel:   { editingID = nil },
-                            onDelete:   { removeSnippet(snippet) }
+                            snippet:   snippet,
+                            isEditing: editingID == snippet.id,
+                            onEdit:    { editingID = snippet.id },
+                            onSave:    { t, e in saveEdit(snippet, trigger: t, expansion: e) },
+                            onCancel:  { editingID = nil },
+                            onDelete:  { removeSnippet(snippet) }
                         )
                     }
                 }
@@ -80,30 +60,20 @@ struct SnippetsView: View {
 
             Divider()
 
-            // ── Add new snippet ───────────────────────────────
+            // Add snippet
             VStack(alignment: .leading, spacing: 8) {
-                Text("Add snippet")
-                    .font(.headline)
-
+                Text("Add snippet").font(.headline)
                 HStack(spacing: 8) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Trigger word")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                        Text("Trigger word").font(.caption).foregroundColor(.secondary)
                         TextField("e.g. zoom link", text: $newTrigger)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 160)
+                            .textFieldStyle(.roundedBorder).frame(width: 160)
                     }
-
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Expansion")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+                        Text("Expansion").font(.caption).foregroundColor(.secondary)
                         TextField("Text or URL", text: $newExpansion)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 260)
+                            .textFieldStyle(.roundedBorder).frame(width: 260)
                     }
-
                     VStack(alignment: .leading, spacing: 4) {
                         Text(" ").font(.caption)
                         Button("Add") { addSnippet() }
@@ -111,10 +81,8 @@ struct SnippetsView: View {
                             .disabled(newTrigger.isEmpty || newExpansion.isEmpty)
                     }
                 }
-
                 if !statusMessage.isEmpty {
-                    Text(statusMessage)
-                        .font(.caption)
+                    Text(statusMessage).font(.caption)
                         .foregroundColor(statusMessage.hasPrefix("Failed") ? .red : .secondary)
                 }
             }
@@ -124,10 +92,6 @@ struct SnippetsView: View {
         .onAppear { loadSnippets() }
     }
 
-    // =========================================================
-    // Helpers
-    // =========================================================
-
     private func loadSnippets() {
         isLoading = true
         backendClient?.listSnippets { items in
@@ -135,11 +99,7 @@ struct SnippetsView: View {
                 guard let trigger   = s["trigger"]   as? String,
                       let expansion = s["expansion"] as? String
                 else { return nil }
-                return SnippetEntry(
-                    trigger:   trigger,
-                    expansion: expansion,
-                    enabled:   s["enabled"] as? Bool ?? true
-                )
+                return SnippetEntry(trigger: trigger, expansion: expansion, enabled: s["enabled"] as? Bool ?? true)
             }
             DispatchQueue.main.async {
                 self.snippets  = loaded
@@ -169,7 +129,6 @@ struct SnippetsView: View {
     }
 
     private func saveEdit(_ snippet: SnippetEntry, trigger: String, expansion: String) {
-        // Remove old, add new
         backendClient?.removeSnippet(trigger: snippet.trigger) { _ in
             self.backendClient?.addSnippet(trigger: trigger, expansion: expansion) { success in
                 DispatchQueue.main.async {
@@ -185,17 +144,11 @@ struct SnippetsView: View {
     private func removeSnippet(_ snippet: SnippetEntry) {
         backendClient?.removeSnippet(trigger: snippet.trigger) { success in
             DispatchQueue.main.async {
-                if success {
-                    self.snippets.removeAll { $0.id == snippet.id }
-                }
+                if success { self.snippets.removeAll { $0.id == snippet.id } }
             }
         }
     }
 }
-
-// =========================================================
-// Snippet row — supports inline editing
-// =========================================================
 
 struct SnippetRow: View {
     let snippet   : SnippetEntry
@@ -212,25 +165,17 @@ struct SnippetRow: View {
         if isEditing {
             HStack(spacing: 8) {
                 TextField("Trigger", text: $editTrigger)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 140)
-
-                TextField("Expansion", text: $editExpansion)
-                    .textFieldStyle(.roundedBorder)
-
+                    .textFieldStyle(.roundedBorder).frame(width: 140)
+                TextField("Expansion", text: $editExpansion).textFieldStyle(.roundedBorder)
                 Button("Save") {
                     onSave(
                         editTrigger.trimmingCharacters(in: .whitespacesAndNewlines),
                         editExpansion.trimmingCharacters(in: .whitespacesAndNewlines)
                     )
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
+                .buttonStyle(.borderedProminent).controlSize(.small)
                 .disabled(editTrigger.isEmpty || editExpansion.isEmpty)
-
-                Button("Cancel", action: onCancel)
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                Button("Cancel", action: onCancel).buttonStyle(.bordered).controlSize(.small)
             }
             .padding(.vertical, 4)
             .onAppear {
@@ -239,41 +184,21 @@ struct SnippetRow: View {
             }
         } else {
             HStack(spacing: 10) {
-                // Trigger badge
                 Text(snippet.trigger)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
+                    .font(.subheadline).fontWeight(.medium)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
                     .background(Color.accentColor.opacity(0.12))
                     .cornerRadius(5)
-
-                // Expansion
                 Text(snippet.expansion)
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-
+                    .font(.subheadline).foregroundColor(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
                 Spacer()
-
-                // Edit button
-                Button {
-                    onEdit()
-                } label: {
-                    Image(systemName: "pencil")
-                        .foregroundColor(.secondary)
-                }
-                .buttonStyle(.plain)
-
-                // Delete button
-                Button {
-                    onDelete()
-                } label: {
-                    Image(systemName: "trash")
-                        .foregroundColor(.red)
-                }
-                .buttonStyle(.plain)
+                Button { onEdit() } label: {
+                    Image(systemName: "pencil").foregroundColor(.secondary)
+                }.buttonStyle(.plain)
+                Button { onDelete() } label: {
+                    Image(systemName: "trash").foregroundColor(.red)
+                }.buttonStyle(.plain)
             }
             .padding(.vertical, 4)
         }
