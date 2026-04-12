@@ -6,7 +6,12 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		0E6AE3ED2F8B144F006BCE00 /* backend in Resources */ = {isa = PBXBuildFile; fileRef = 0E6AE3EC2F8B144E006BCE00 /* backend */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
+		0E6AE3EC2F8B144E006BCE00 /* backend */ = {isa = PBXFileReference; lastKnownFileType = folder; name = backend; path = ../backend; sourceTree = "<group>"; };
 		7F84EEED2F652CC30004E886 /* Whispr.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Whispr.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -46,6 +51,7 @@
 		7F84EEE42F652CC30004E886 = {
 			isa = PBXGroup;
 			children = (
+				0E6AE3EC2F8B144E006BCE00 /* backend */,
 				7F84EEEE2F652CC30004E886 /* Products */,
 				7F84EEEF2F652CC30004E886 /* Whispr */,
 			);
@@ -124,6 +130,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0E6AE3ED2F8B144F006BCE00 /* backend in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -146,7 +153,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\n\nBACKEND_SRC=\"${SRCROOT}/../backend\"\nBACKEND_DST=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources/backend\"\n\nRUNTIME_SRC=\"${SRCROOT}/../runtime\"\nRUNTIME_DST=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources/runtime\"\n\nif [ ! -d \"${BACKEND_SRC}\" ]; then\n  echo \"Backend source folder not found: ${BACKEND_SRC}\"\n  exit 1\nfi\n\nrm -rf \"${BACKEND_DST}\"\nmkdir -p \"${BACKEND_DST}\"\ncp -R \"${BACKEND_SRC}/.\" \"${BACKEND_DST}/\"\n\nfind \"${BACKEND_DST}\" -name \"__pycache__\" -exec rm -rf {} + 2>/dev/null || true\nfind \"${BACKEND_DST}\" -name \"*.pyc\" -delete 2>/dev/null || true\nrm -rf \"${BACKEND_DST}/.co\" 2>/dev/null || true\nrm -f \"${BACKEND_DST}/.env\" 2>/dev/null || true\nrm -f \"${BACKEND_DST}/credentials.json\" 2>/dev/null || true\nrm -f \"${BACKEND_DST}/token.json\" 2>/dev/null || true\n\nif [ -d \"${RUNTIME_SRC}\" ]; then\n  rm -rf \"${RUNTIME_DST}\"\n  mkdir -p \"${RUNTIME_DST}\"\n  cp -R \"${RUNTIME_SRC}/.\" \"${RUNTIME_DST}/\"\n  echo \"Runtime copied from ${RUNTIME_SRC}\"\n  echo \"Runtime copied to ${RUNTIME_DST}\"\nelse\n  echo \"Runtime source folder not found: ${RUNTIME_SRC}\"\nfi\n\necho \"Backend copied from ${BACKEND_SRC}\"\necho \"Backend copied to ${BACKEND_DST}\"\n";
+			shellScript = "set -e\n\nBACKEND_SRC=\"${SRCROOT}/../backend\"\nBACKEND_DST=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources/backend\"\n\nRUNTIME_SRC=\"${SRCROOT}/../runtime\"\nRUNTIME_DST=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources/runtime\"\n\nif [ ! -d \"${BACKEND_SRC}\" ]; then\n  echo \"Backend source folder not found: ${BACKEND_SRC}\"\n  exit 1\nfi\n\nif [ ! -d \"${RUNTIME_SRC}\" ]; then\n  echo \"Runtime source folder not found: ${RUNTIME_SRC}\"\n  exit 1\nfi\n\nrm -rf \"${BACKEND_DST}\" \"${RUNTIME_DST}\"\nmkdir -p \"${BACKEND_DST}\" \"${RUNTIME_DST}\"\n\n# Copy backend, including hidden files like .co\nrsync -a \\\n  --exclude=\"__pycache__\" \\\n  --exclude=\"*.pyc\" \\\n  --exclude=\".DS_Store\" \\\n  --exclude=\".git\" \\\n  --exclude=\".gitignore\" \\\n  --exclude=\".env\" \\\n  --exclude=\"token.json\" \\\n  --exclude=\".co/evals\" \\\n  --exclude=\".co/logs\" \\\n  \"${BACKEND_SRC}/\" \"${BACKEND_DST}/\"\n\n# Copy runtime\nrsync -a \\\n  --exclude=\"__pycache__\" \\\n  --exclude=\"*.pyc\" \\\n  --exclude=\".DS_Store\" \\\n  \"${RUNTIME_SRC}/\" \"${RUNTIME_DST}/\"\n\n# Make bundled python executable\nif [ -f \"${RUNTIME_DST}/venv/bin/python\" ]; then\n  chmod +x \"${RUNTIME_DST}/venv/bin/python\"\nfi\n\necho \"Backend copied to ${BACKEND_DST}\"\necho \"Runtime copied to ${RUNTIME_DST}\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -303,6 +310,15 @@
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/Whispr",
+					"$(PROJECT_DIR)/runtime/venv/lib/python3.11/site-packages/pydantic_core",
+					"$(PROJECT_DIR)/runtime/venv/lib/python3.11/site-packages/tokenizers",
+					"$(PROJECT_DIR)/runtime/venv/lib/python3.11/site-packages/hf_xet",
+					"$(PROJECT_DIR)/runtime/venv/lib/python3.11/site-packages/google/_upb",
+					"$(PROJECT_DIR)/runtime/venv/lib/python3.11/site-packages/cryptography/hazmat/bindings",
+					"$(PROJECT_DIR)/runtime/venv/lib/python3.11/site-packages/tiktoken",
+					"$(PROJECT_DIR)/runtime/venv/lib/python3.11/site-packages/jiter",
+					"$(PROJECT_DIR)/runtime/venv/lib/python3.11/site-packages/fastuuid",
+					"$(PROJECT_DIR)/runtime/venv/lib/python3.11/site-packages/rpds",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MARKETING_VERSION = 1.0;
@@ -342,6 +358,15 @@
 				LIBRARY_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(PROJECT_DIR)/Whispr",
+					"$(PROJECT_DIR)/runtime/venv/lib/python3.11/site-packages/pydantic_core",
+					"$(PROJECT_DIR)/runtime/venv/lib/python3.11/site-packages/tokenizers",
+					"$(PROJECT_DIR)/runtime/venv/lib/python3.11/site-packages/hf_xet",
+					"$(PROJECT_DIR)/runtime/venv/lib/python3.11/site-packages/google/_upb",
+					"$(PROJECT_DIR)/runtime/venv/lib/python3.11/site-packages/cryptography/hazmat/bindings",
+					"$(PROJECT_DIR)/runtime/venv/lib/python3.11/site-packages/tiktoken",
+					"$(PROJECT_DIR)/runtime/venv/lib/python3.11/site-packages/jiter",
+					"$(PROJECT_DIR)/runtime/venv/lib/python3.11/site-packages/fastuuid",
+					"$(PROJECT_DIR)/runtime/venv/lib/python3.11/site-packages/rpds",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.6;
 				MARKETING_VERSION = 1.0;
