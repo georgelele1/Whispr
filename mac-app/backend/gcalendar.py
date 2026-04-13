@@ -49,7 +49,7 @@ SCOPES           = [
     "openid",
 ]
 REDIRECT_URI     = "http://localhost:8765/callback"
-CREDENTIALS_FILE = Path(__file__).resolve().parent / "credentials.json"
+CREDENTIALS_FILE = Path(__file__).resolve().parent / "./credentials.json"
 DEFAULT_TZ       = "Australia/Sydney"
 
 
