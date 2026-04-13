@@ -9,28 +9,14 @@ enum AppStatus: String, CaseIterable {
     var menuBarIcon: NSImage {
         let imageName: String
         switch self {
-        case .idle:
-            imageName = "mic.slash"
-        case .listening:
-            imageName = "mic.fill"
-        case .processing:
-            imageName = "waveform.circle.fill"
-        case .error:
-            imageName = "mic.badge.xmark"
+        case .idle:       imageName = "mic.slash"
+        case .listening:  imageName = "mic.fill"
+        case .processing: imageName = "waveform.circle.fill"
+        case .error:      imageName = "mic.badge.xmark"
         }
-
         let image = NSImage(systemSymbolName: imageName, accessibilityDescription: rawValue)
             ?? NSImage(systemSymbolName: "mic", accessibilityDescription: "default")!
         image.isTemplate = true
         return image
     }
-}
-
-enum TranscriptionMode: String {
-    case clean
-    case formal
-    case chat
-    case code
-    case academic
-    case generic
 }

@@ -1,18 +1,16 @@
 import AppKit
 import Carbon.HIToolbox
-import Combine
 
 final class HotkeyManager {
-    
+
     private var hotkeyMonitor: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var hotkeyHandler: ((Bool) -> Void)?
-    
-    // Start: option + Space
+
+    // Start: Option + Space
     private let startHotkey = KeyCombo(keyCode: 49, modifiers: [.option])
-    
-    // Stop: option Set my calendar for tomorrow.+ S
-    private let stopHotkey = KeyCombo(keyCode: 1, modifiers: [.option])
+    // Stop:  Option + S
+    private let stopHotkey  = KeyCombo(keyCode: 1,  modifiers: [.option])
 
     // Only compare these modifier bits, ignore device-dependent raw bits
     private let relevantModifiers: NSEvent.ModifierFlags = [.command, .shift, .control, .option]
@@ -20,7 +18,6 @@ final class HotkeyManager {
     func setupGlobalHotkey(handler: @escaping (Bool) -> Void) {
         hotkeyHandler = handler
 
-        // Check Accessibility permission first — tap creation silently fails without it
         let trusted = AXIsProcessTrustedWithOptions(
             [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
         )
@@ -29,7 +26,6 @@ final class HotkeyManager {
         }
 
         let callback: CGEventTapCallBack = { _, type, event, refcon in
-
             guard let refcon else {
                 return Unmanaged.passUnretained(event)
             }
@@ -48,38 +44,23 @@ final class HotkeyManager {
                 return Unmanaged.passUnretained(event)
             }
 
-            let keyCode = Int32(event.getIntegerValueField(.keyboardEventKeycode))
+            let keyCode    = Int32(event.getIntegerValueField(.keyboardEventKeycode))
+            let rawMods    = NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue))
+            let modifiers  = rawMods.intersection(manager.relevantModifiers)
 
-            // Mask to only relevant modifier bits to avoid raw flag noise
-            let rawModifiers = NSEvent.ModifierFlags(rawValue: UInt(event.flags.rawValue))
-            let modifiers = rawModifiers.intersection(manager.relevantModifiers)
-
-            let startMatch =
-                keyCode == manager.startHotkey.keyCode &&
-                modifiers == manager.startHotkey.modifiers
-
-            let stopMatch =
-                keyCode == manager.stopHotkey.keyCode &&
-                modifiers == manager.stopHotkey.modifiers
-
-            if startMatch {
-                DispatchQueue.main.async {
-                    manager.hotkeyHandler?(true)
-                }
+            if keyCode == manager.startHotkey.keyCode && modifiers == manager.startHotkey.modifiers {
+                DispatchQueue.main.async { manager.hotkeyHandler?(true) }
                 return nil
             }
 
-            if stopMatch {
-                DispatchQueue.main.async {
-                    manager.hotkeyHandler?(false)
-                }
+            if keyCode == manager.stopHotkey.keyCode && modifiers == manager.stopHotkey.modifiers {
+                DispatchQueue.main.async { manager.hotkeyHandler?(false) }
                 return nil
             }
 
             return Unmanaged.passUnretained(event)
         }
 
-        // Listen to keyDown + tapDisabled events
         let mask: CGEventMask =
             (1 << CGEventType.keyDown.rawValue) |
             (1 << CGEventType.tapDisabledByTimeout.rawValue) |
@@ -100,27 +81,13 @@ final class HotkeyManager {
         }
 
         runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, monitor, 0)
-
         if let source = runLoopSource {
-            // Use main run loop explicitly, not CFRunLoopGetCurrent()
             CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-            NSLog("HotkeyManager: Event tap registered successfully")
         }
     }
 
-    func showHotkeyConfiguration() {
-        let alert = NSAlert()
-        alert.messageText = "Hotkeys"
-        alert.informativeText = """
-Start Recording: Cmd + Shift + Space
-Stop Recording: Cmd + Shift + S
-"""
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
-    }
-
     struct KeyCombo {
-        let keyCode: Int32
+        let keyCode  : Int32
         let modifiers: NSEvent.ModifierFlags
     }
 }

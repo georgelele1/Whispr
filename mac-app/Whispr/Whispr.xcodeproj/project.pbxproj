@@ -7,11 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		0E6AE3ED2F8B144F006BCE00 /* backend in Resources */ = {isa = PBXBuildFile; fileRef = 0E6AE3EC2F8B144E006BCE00 /* backend */; };
+		0EFFE47E2F8C8DF70051DCC0 /* backend in Resources */ = {isa = PBXBuildFile; fileRef = 0EFFE47D2F8C8DF70051DCC0 /* backend */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		0E6AE3EC2F8B144E006BCE00 /* backend */ = {isa = PBXFileReference; lastKnownFileType = folder; name = backend; path = ../backend; sourceTree = "<group>"; };
+		0EFFE47D2F8C8DF70051DCC0 /* backend */ = {isa = PBXFileReference; lastKnownFileType = folder; name = backend; path = ../backend; sourceTree = "<group>"; };
 		7F84EEED2F652CC30004E886 /* Whispr.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Whispr.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -51,7 +51,7 @@
 		7F84EEE42F652CC30004E886 = {
 			isa = PBXGroup;
 			children = (
-				0E6AE3EC2F8B144E006BCE00 /* backend */,
+				0EFFE47D2F8C8DF70051DCC0 /* backend */,
 				7F84EEEE2F652CC30004E886 /* Products */,
 				7F84EEEF2F652CC30004E886 /* Whispr */,
 			);
@@ -130,7 +130,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				0E6AE3ED2F8B144F006BCE00 /* backend in Resources */,
+				0EFFE47E2F8C8DF70051DCC0 /* backend in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

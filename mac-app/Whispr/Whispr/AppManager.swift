@@ -9,9 +9,7 @@ final class AppManager: ObservableObject {
     let hotkeyManager      = HotkeyManager()
     let audioRecorder      = AudioRecorder()
     let localBackendClient = LocalBackendClient()
-    let activeAppDetector  = ActiveAppDetector()
 
-    // FloatingIndicator is the correct type — FloatingStatusButton does not exist
     private let floatingIndicator = FloatingIndicator()
 
     @Published var appStatus: AppStatus = .idle
@@ -19,7 +17,6 @@ final class AppManager: ObservableObject {
     @Published var currentActiveApp: String = "Unknown"
 
     private var targetAppPID: pid_t = 0
-    private var cancellables = Set<AnyCancellable>()
 
     // MARK: - Init
 
@@ -129,9 +126,6 @@ final class AppManager: ObservableObject {
 
         updateAppStatus(.processing)
 
-        print("audio path =", audioFileURL.path)
-        print("file exists before run =", FileManager.default.fileExists(atPath: audioFileURL.path))
-
         localBackendClient.transcribeAudio(
             fileURL: audioFileURL,
             appName: currentActiveApp
@@ -143,7 +137,6 @@ final class AppManager: ObservableObject {
                     self.lastOutputText = text
                     self.updateAppStatus(.idle)
                     self.pasteTextToTargetApp(text: text)
-
                 case .failure(let error):
                     self.updateAppStatus(.error)
                     self.showErrorAlert(message: "Transcription failed: \(error.localizedDescription)")
@@ -178,37 +171,18 @@ final class AppManager: ObservableObject {
 
     private func pasteTextToTargetApp(text: String) {
         let pasteboard = NSPasteboard.general
-        // Capture previous contents before clearing
-        let previousItems = pasteboard.pasteboardItems?.map { item -> [NSPasteboard.PasteboardType: Data] in
-            var data: [NSPasteboard.PasteboardType: Data] = [:]
-            for type in item.types {
-                if let d = item.data(forType: type) {
-                    data[type] = d
-                }
-            }
-            return data
-        }
-
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
 
-        let source  = CGEventSource(stateID: .hidSystemState)
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true)
-        keyDown?.flags = .maskCommand
-        keyDown?.post(tap: .cghidEventTap)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            let source  = CGEventSource(stateID: .hidSystemState)
+            let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true)
+            keyDown?.flags = .maskCommand
+            keyDown?.post(tap: .cghidEventTap)
 
-        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false)
-        keyUp?.flags = .maskCommand
-        keyUp?.post(tap: .cghidEventTap)
-
-        // Restore previous pasteboard contents after paste completes
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            pasteboard.clearContents()
-            previousItems?.forEach { dict in
-                for (type, data) in dict {
-                    pasteboard.setData(data, forType: type)
-                }
-            }
+            let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false)
+            keyUp?.flags = .maskCommand
+            keyUp?.post(tap: .cghidEventTap)
         }
     }
 }

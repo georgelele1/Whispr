@@ -7,7 +7,7 @@ final class AudioRecorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
 
     private var recorder: AVAudioRecorder?
     private var tempAudioURL: URL?
-    private let maxRecordingDuration: TimeInterval = 300
+    private let maxRecordingDuration: TimeInterval = 600
 
     // Tracks whether the current stop was triggered manually (via stopRecording()).
     // If false when audioRecorderDidFinishRecording fires, it was a timeout auto-stop.

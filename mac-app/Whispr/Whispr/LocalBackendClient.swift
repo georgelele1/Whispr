@@ -155,6 +155,7 @@ final class LocalBackendClient: ObservableObject {
 
         let dictionaryScriptPath = URL(fileURLWithPath: backendScriptPath)
             .deletingLastPathComponent()
+            .appendingPathComponent("agents", isDirectory: true)
             .appendingPathComponent("dictionary_agent.py")
             .path
 
@@ -281,6 +282,7 @@ final class LocalBackendClient: ObservableObject {
 
             let outputString = String(data: outputData, encoding: .utf8) ?? ""
             let errorString = String(data: errorData, encoding: .utf8) ?? ""
+
 
             DispatchQueue.main.async {
                 let trimmed = outputString.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -553,6 +555,7 @@ final class LocalBackendClient: ObservableObject {
         guard let backendScriptPath else { return nil }
         return URL(fileURLWithPath: backendScriptPath)
             .deletingLastPathComponent()
+            .appendingPathComponent("agents", isDirectory: true)
             .appendingPathComponent("dictionary_agent.py")
             .path
     }

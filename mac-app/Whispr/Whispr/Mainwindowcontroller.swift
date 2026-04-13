@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import Combine
 
-final class MainWindowController: NSObject {
+final class MainWindowController: NSObject, ObservableObject {
     static let shared = MainWindowController()
 
     private var window: NSWindow?
@@ -220,10 +220,10 @@ struct SidebarView: View {
 
                     SettingsSection(title: "Data Management") {
                         VStack(spacing: 5) {
-                            ClearRow(label: "Transcription history", state: clearingHistory)   { armClear(.history) }
-                            ClearRow(label: "Personal dictionary",   state: clearingDictionary) { armClear(.dictionary) }
-                            ClearRow(label: "Voice snippets",        state: clearingSnippets)   { armClear(.snippets) }
-                            ClearRow(label: "Profile & learned context", state: resettingProfile) { armClear(.profile) }
+                            ClearRow(label: "Transcription history",     state: clearingHistory)    { armClear(.history) }
+                            ClearRow(label: "Personal dictionary",       state: clearingDictionary) { armClear(.dictionary) }
+                            ClearRow(label: "Voice snippets",            state: clearingSnippets)   { armClear(.snippets) }
+                            ClearRow(label: "Profile & learned context", state: resettingProfile)   { armClear(.profile) }
 
                             Button { armClear(.all) } label: {
                                 HStack(spacing: 5) {
@@ -258,12 +258,20 @@ struct SidebarView: View {
             Spacer()
             Divider()
 
-            VStack(alignment: .leading, spacing: 0) {
-                SidebarBottomRow(icon: "questionmark.circle", label: "Help") {}
-                SidebarBottomRow(icon: "power", label: "Quit Whispr", isDestructive: true) {
-                    NSApp.terminate(nil)
+            // ── Quit ─────────────────────────────────────────
+            Button {
+                NSApp.terminate(nil)
+            } label: {
+                HStack(spacing: 9) {
+                    Image(systemName: "power").font(.system(size: 12)).frame(width: 16)
+                    Text("Quit Whispr").font(.system(size: 12))
+                    Spacer()
                 }
+                .foregroundColor(.red)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 6)
             }
+            .buttonStyle(.plain)
             .padding(.vertical, 8)
         }
         .frame(width: 220)
@@ -497,21 +505,5 @@ struct HotkeyRow: View {
         .background(Color(NSColor.textBackgroundColor))
         .cornerRadius(6)
         .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.15), lineWidth: 0.5))
-    }
-}
-
-struct SidebarBottomRow: View {
-    let icon: String; let label: String; var isDestructive: Bool = false; let action: () -> Void
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 9) {
-                Image(systemName: icon).font(.system(size: 12)).frame(width: 16)
-                Text(label).font(.system(size: 12))
-                Spacer()
-            }
-            .foregroundColor(isDestructive ? .red : .secondary)
-            .padding(.horizontal, 18).padding(.vertical, 6)
-        }
-        .buttonStyle(.plain)
     }
 }
