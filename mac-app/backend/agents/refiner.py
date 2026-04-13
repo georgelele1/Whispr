@@ -6,7 +6,7 @@ Events:
   after_user_input → inject_dictionary   (known terms to fix)
   after_user_input → generate_expected   (eval plugin)
   before_llm       → inject_language     (language plugin)
-  on_complete      → apply_snippets      (hardcode string replace)
+  on_complete      → apply_snippets      (applied to return value after LLM)
   on_complete      → update_dictionary_background (debounced, daemon)
   on_complete      → update_profile_background    (debounced, daemon)
   on_complete      → show_summary        (visibility plugin)
@@ -32,24 +32,19 @@ from agents.plugins.visibility import show_summary
 from agents.plugins.eval       import generate_expected, evaluate_and_retry
 
 
-def _apply_snippets(agent) -> None:
-    """on_complete — hardcode snippet expansion. No LLM, no agent."""
+def _apply_snippets(text: str) -> str:
+    """Post-process — expand snippet triggers in the final output. No LLM."""
     from snippets import load_snippets
-    messages = agent.current_session.get("messages", [])
-    for msg in reversed(messages):
-        if msg.get("role") == "assistant":
-            text = str(msg["content"])
-            for item in load_snippets().get("snippets", []):
-                if not item.get("enabled", True):
-                    continue
-                trigger   = str(item.get("trigger", "")).strip()
-                expansion = str(item.get("expansion", "")).strip()
-                if trigger and expansion:
-                    text = re.sub(
-                        rf"\b{re.escape(trigger)}\b", expansion, text, flags=re.IGNORECASE
-                    )
-            msg["content"] = text
-            break
+    for item in load_snippets().get("snippets", []):
+        if not item.get("enabled", True):
+            continue
+        trigger   = str(item.get("trigger", "")).strip()
+        expansion = str(item.get("expansion", "")).strip()
+        if trigger and expansion:
+            text = re.sub(
+                rf"\b{re.escape(trigger)}\b", expansion, text, flags=re.IGNORECASE
+            )
+    return text
 
 
 def _set_intent(agent) -> None:
@@ -107,7 +102,6 @@ def run(text: str, app_name: str) -> str:
             after_user_input(inject_dictionary),
             after_user_input(generate_expected),
             before_llm(inject_language),
-            on_complete(_apply_snippets),
             on_complete(update_dictionary_background),
             on_complete(update_profile_background),
             on_complete(show_summary),
@@ -117,4 +111,5 @@ def run(text: str, app_name: str) -> str:
 
     # Inject app name into the input so the LLM sees it alongside the text
     prompt = f"[App: {app_name}]\n{cleaned}" if app_name and app_name != "unknown" else cleaned
-    return str(agent.input(prompt)).strip().strip('"').strip("'")
+    result = str(agent.input(prompt)).strip().strip('"').strip("'")
+    return _apply_snippets(result)
