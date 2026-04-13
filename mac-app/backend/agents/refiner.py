@@ -1,83 +1,65 @@
 """
-agents/refiner.py — Voice transcription cleaning and formatting.
+agents/refiner.py — Voice transcription cleaning and formatting subagent.
 
-Handles:
-  - Filler/stutter removal
-  - Phonetic correction using context and dictionary
-  - Numbered list detection and formatting
-  - App-aware formatting (email, code, chat, document)
-  - Translation to target language
+Events:
+  after_user_input → inject_profile      (user style + habits)
+  after_user_input → inject_dictionary   (known terms to fix)
+  after_user_input → generate_expected   (eval plugin)
+  before_llm       → inject_language     (language plugin)
+  on_complete      → apply_snippets      (hardcode string replace)
+  on_complete      → update_dictionary_background (debounced, daemon)
+  on_complete      → update_profile_background    (debounced, daemon)
+  on_complete      → show_summary        (visibility plugin)
+  on_complete      → evaluate_output     (eval plugin)
 """
 from __future__ import annotations
 
-import sys as _sys
-from pathlib import Path as _Path
-_backend_root = str(_Path(__file__).resolve().parents[2])
-if _backend_root not in _sys.path:
-    _sys.path.insert(0, _backend_root)
-
-import io as _io
 import re
 import sys
+import io as _io
 
-_real_stdout = sys.stdout
-sys.stdout   = _io.StringIO()
-try:
-    from connectonion import Agent
-finally:
-    sys.stdout = _real_stdout
+_real = sys.stdout
+sys.stdout = _io.StringIO()
+from connectonion import Agent, after_user_input, before_llm, on_complete
+sys.stdout = _real
 
-from storage import (
-    load_dictionary, get_target_language, apply_dictionary_corrections,
-    SUPPORTED_LANGUAGES,
-)
-
-
-# =========================================================
-# App-aware formatting hint
-# =========================================================
-
-def _app_hint(app_name: str) -> str:
-    """Return formatting instruction based on active app."""
-    app = app_name.strip().lower()
-    if any(x in app for x in ("mail", "outlook", "gmail")):
-        return (
-            "Active app: Mail (email client). "
-            "Format output as a professional email — proper greeting, clear body, sign-off. "
-        )
-    if any(x in app for x in ("xcode", "vscode", "code", "pycharm", "cursor", "intellij")):
-        return (
-            "Active app: Code editor. "
-            "Format as code comments or technical notes. "
-            "Use precise technical language. Preserve code terms exactly. "
-        )
-    if any(x in app for x in ("word", "pages", "docs", "notion", "confluence")):
-        return (
-            "Active app: Document editor. "
-            "Format as polished document text — clear paragraphs, proper structure. "
-        )
-    if any(x in app for x in ("slack", "teams", "discord", "messages", "telegram")):
-        return (
-            "Active app: Chat/messaging. "
-            "Keep output conversational and concise — suitable for chat. "
-        )
-    if app and app != "unknown":
-        return f"Active app: {app_name.strip()}. "
-    return ""
+from storage import apply_dictionary_corrections
+from agents.profile   import inject_profile, update_profile_background
+from agents.dictionary_agent import inject_dictionary, update_dictionary_background
+from agents.plugins.lang    import inject_language
+from agents.plugins.session  import inject_session, session_remember
+from agents.plugins.visibility import show_summary
+from agents.plugins.eval       import generate_expected, evaluate_and_retry
 
 
-# =========================================================
-# Quick clean — 0ms, no LLM
-# =========================================================
+def _apply_snippets(agent) -> None:
+    """on_complete — hardcode snippet expansion. No LLM, no agent."""
+    from snippets import load_snippets
+    messages = agent.current_session.get("messages", [])
+    for msg in reversed(messages):
+        if msg.get("role") == "assistant":
+            text = str(msg["content"])
+            for item in load_snippets().get("snippets", []):
+                if not item.get("enabled", True):
+                    continue
+                trigger   = str(item.get("trigger", "")).strip()
+                expansion = str(item.get("expansion", "")).strip()
+                if trigger and expansion:
+                    text = re.sub(
+                        rf"\b{re.escape(trigger)}\b", expansion, text, flags=re.IGNORECASE
+                    )
+            msg["content"] = text
+            break
 
-def quick_clean(text: str) -> str:
-    """Fast pre-clean before intent detection.
 
-    Applies dictionary corrections + removes fillers/stutters using regex.
-    No LLM — runs in 0ms.
-    """
+def _set_intent(agent) -> None:
+    """after_user_input — tag session so eval plugin knows which criteria to apply."""
+    agent.current_session["whispr_intent"] = "refiner"
+
+
+def _quick_clean(text: str) -> str:
+    """Remove fillers and stutters — 0ms, no LLM."""
     text = apply_dictionary_corrections(text)
-
     fillers = re.compile(
         r"\b(uh+|um+|er+|hmm+|ah+|oh+|like|so|basically|actually|"
         r"you know|kind of|sort of|right|okay so|well)\b[,]?\s*",
@@ -85,126 +67,54 @@ def quick_clean(text: str) -> str:
     )
     text = fillers.sub(" ", text)
     text = re.sub(r"\b(\w+)\s+\1\b", r"\1", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s{2,}", " ", text).strip()
-    return text
+    return re.sub(r"\s{2,}", " ", text).strip()
 
 
-# =========================================================
-# Dictionary tool
-# =========================================================
+def run(text: str, app_name: str) -> str:
+    """Clean and format raw transcribed speech."""
+    cleaned = _quick_clean(text)
+    has_cjk = bool(re.search(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", text))
 
-def get_dictionary_terms() -> dict:
-    """Tool: return approved dictionary terms for the refiner agent."""
-    terms = [
-        {"phrase": str(item.get("phrase", "")).strip(), "aliases": item.get("aliases", [])}
-        for item in load_dictionary().get("terms", [])
-        if item.get("approved", True) and str(item.get("phrase", "")).strip()
-    ]
-    return {"terms": terms, "count": len(terms)}
-
-
-# =========================================================
-# Register tool helper
-# =========================================================
-
-def _register_tool(agent: Agent, fn) -> None:
-    for attr in ("add_tools", "add_tool"):
-        if hasattr(agent, attr) and callable(getattr(agent, attr)):
-            getattr(agent, attr)(fn)
-            return
-    reg = getattr(agent, "tools", None)
-    if reg is not None:
-        for meth in ("register", "add", "add_tool", "add_function", "append"):
-            m = getattr(reg, meth, None)
-            if callable(m):
-                m(fn)
-                return
-
-
-# =========================================================
-# Main refiner
-# =========================================================
-
-def ai_refine_text(
-    text           : str,
-    app_name       : str = "",
-    target_language: str = "",
-    user_context   : str = "",
-) -> str:
-    """Clean and format voice transcription text.
-
-    Args:
-        text:            Raw transcribed speech.
-        app_name:        Active app name for format hints.
-        target_language: Output language.
-        user_context:    Pre-built user profile string.
-
-    Returns:
-        Cleaned, formatted text.
-    """
-    if not text.strip():
-        return text
-
-    lang = target_language.strip()
-    if not lang or lang not in SUPPORTED_LANGUAGES:
-        lang = get_target_language()
-
-    # Skip LLM only for short clean English-only text.
-    # NEVER skip when:
-    #   - text contains CJK characters (Chinese/Japanese/Korean) — no spaces so
-    #     split() always returns 1 word regardless of length
-    #   - translation is needed
-    _has_cjk = bool(re.search(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", text))
-    _needs_translate = True  # always enforce target language, including English
-    if (
-        not _has_cjk
-        and not _needs_translate
-        and len(text.split()) < 5
-        and not re.search(r"\b(uh|um|er|so so|I I|the the)\b", text, re.IGNORECASE)
-    ):
-        return apply_dictionary_corrections(text)
-
-    app_fmt  = _app_hint(app_name)
-    ctx_hint = f"User context: {user_context} " if user_context else ""
-    trans    = (
-        f"Your entire output MUST be in {lang}. "
-        f"Translate the user's speech into {lang} whenever the source language differs. "
-        "If the source is already in the target language, keep it in that language while refining it. "
-        "Keep technical symbols, code terms, file paths, commands, APIs, version strings, and proper nouns unchanged when appropriate."
-    )
-
-    # Skip dictionary tool — quick_clean already applied regex corrections before routing.
-    # Only use tool for longer texts where context-aware correction matters.
-    word_count = len(text.split())
-    has_dict   = bool(load_dictionary().get("terms")) and word_count > 15
-    dict_step  = "1. Call get_dictionary_terms and apply corrections. " if has_dict else ""
-    offset     = 2 if has_dict else 1
+    if not has_cjk and len(cleaned.split()) < 5:
+        return cleaned
 
     agent = Agent(
         model="gpt-5.4",
-        name="whispr_text_refiner",
+        name="whispr_refiner",
         system_prompt=(
-            "You are a personal voice transcription assistant. "
-            f"{ctx_hint}{app_fmt}"
-            f"Output language: {lang}. "
-            f"{dict_step}"
-            f"{offset}. Fix phonetic mishearings using context and user profile. "
-            f"{offset+1}. Remove ALL stutters, false starts, repeated words, "
-            "filler words (uh, um, like, so, basically, actually, you know, right, okay so), "
-            "interjections (ah, oh, hmm, yeah, well). "
-            f"{offset+2}. Detect numbered list (point one/two, first/second/third, number one/two) "
-            "→ format as numbered list, one item per line. Otherwise prose. "
-            f"{offset+3}. Apply app-specific formatting strictly: "
-            "If Mail/email app → structure as complete email with Subject:, greeting, body, sign-off. "
-            "If code editor → use technicag zl language, preserve code terms. "
-            "If chat app → keep concise and conversational. "
-            "If document editor → use clear paragraphs and proper structure. "
-            f"{offset+4}. Fix punctuation and capitalisation. "
-            f"{trans} "
-            "Output ONLY the final formatted text. No explanation."
+            "You are a voice transcription cleaner.\n"
+            "1. Fix phonetic mishearings using the known terms in your context.\n"
+            "2. Remove stutters, false starts, filler words "
+            "(uh, um, like, so, basically, you know, right, okay so).\n"
+            "3. Format as a numbered list when ANY of these apply:\n"
+            "   a) Explicit list speech: 'point one/two', 'first/second/third', 'number one/two'\n"
+            "   b) Long text (4+ sentences) with multiple distinct keypoints, topics, or action items\n"
+            "   c) Instructions or steps where sequence matters\n"
+            "   For prose sentences that flow naturally together, keep as paragraph — do not force a list.\n"
+            "4. Fix punctuation and capitalisation.\n"
+            "5. Format for the active app in your context:\n"
+            "   - Mail → complete email with Subject:, greeting, body, sign-off\n"
+            "   - Slack/Teams → short conversational message\n"
+            "   - Notes/Docs → clean paragraphs or lists as appropriate\n"
+            "   - Code editor → technical language, preserve code terms exactly\n"
+            "6. Match the user's preferred writing style from their profile.\n"
+            "Output ONLY the final cleaned text.\n""NEVER add preamble like \"A cleaned-up version is:\", \"Here is the text:\", \"Certainly\".\n""NEVER offer follow-up suggestions like \"I can also make it more formal\".\n""NEVER explain what you did. First word of output must be first word of the actual content."
         ),
+        on_events=[
+            after_user_input(_set_intent),
+            after_user_input(inject_session),
+            after_user_input(inject_profile),
+            after_user_input(inject_dictionary),
+            after_user_input(generate_expected),
+            before_llm(inject_language),
+            on_complete(_apply_snippets),
+            on_complete(update_dictionary_background),
+            on_complete(update_profile_background),
+            on_complete(show_summary),
+            on_complete(evaluate_and_retry),
+        ],
     )
-    if has_dict:
-        _register_tool(agent, get_dictionary_terms)
 
-    return str(agent.input(text)).strip().strip('"').strip("'").strip()
+    # Inject app name into the input so the LLM sees it alongside the text
+    prompt = f"[App: {app_name}]\n{cleaned}" if app_name and app_name != "unknown" else cleaned
+    return str(agent.input(prompt)).strip().strip('"').strip("'")
