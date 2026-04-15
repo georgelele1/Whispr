@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Combine
+import EventKit
 
 final class MenuBarController: NSObject, NSMenuDelegate {
     static let shared = MenuBarController()
@@ -40,12 +41,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let menu = NSMenu()
 
         // ── Status info (read-only) ───────────────────────────
-        let statusMenuItem = NSMenuItem(title: "Status: Idle", action: nil, keyEquivalent: "")
-        let currentAppItem = NSMenuItem(title: "Current App: Unknown", action: nil, keyEquivalent: "")
-        let lastResultItem = NSMenuItem(title: "Last Result: No transcription yet", action: nil, keyEquivalent: "")
-        statusMenuItem.isEnabled = false
-        currentAppItem.isEnabled = false
-        lastResultItem.isEnabled = false
+        let statusMenuItem  = NSMenuItem(title: "Status: Idle",                    action: nil, keyEquivalent: "")
+        let currentAppItem  = NSMenuItem(title: "Current App: Unknown",            action: nil, keyEquivalent: "")
+        let lastResultItem  = NSMenuItem(title: "Last Result: No transcription yet", action: nil, keyEquivalent: "")
+        statusMenuItem.isEnabled  = false
+        currentAppItem.isEnabled  = false
+        lastResultItem.isEnabled  = false
         menu.addItem(statusMenuItem)
         menu.addItem(currentAppItem)
         menu.addItem(lastResultItem)
@@ -80,8 +81,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         updateDictItem.target = self
         menu.addItem(updateDictItem)
 
-        // ── Google Calendar ───────────────────────────────────
-        let calItem = NSMenuItem(title: "Connect Google Calendar", action: #selector(toggleCalendar), keyEquivalent: "")
+        // ── Mac Calendar permission ───────────────────────────
+        let calItem = NSMenuItem(title: "Calendar Access: Checking…", action: #selector(handleCalendarItem), keyEquivalent: "")
         calItem.target = self
         menu.addItem(calItem)
         calendarMenuItem = calItem
@@ -131,15 +132,22 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             .sink { [weak self] _ in self?.refreshLanguageMenu() }
             .store(in: &cancellables)
 
+        // Observe calendar permission changes
+        AppManager.shared.localBackendClient.$calendarPermission
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshCalendarItem() }
+            .store(in: &cancellables)
+
         statusItem.menu = menu
         menu.delegate = self
-        refreshCalendarLabel()
+        refreshCalendarItem()
     }
 
-    // Capture the frontmost app before the menu steals focus,
-    // so paste always targets the right window.
+    // Capture the frontmost app before the menu steals focus.
     func menuWillOpen(_ menu: NSMenu) {
         AppManager.shared.detectCurrentApp()
+        // Re-read permission each time the menu opens in case user changed it in Settings
+        AppManager.shared.localBackendClient.refreshCalendarPermission()
     }
 
     // MARK: - Language
@@ -156,39 +164,38 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         backendClient.syncLanguageToBackend { _ in }
     }
 
-    // MARK: - Calendar
+    // MARK: - Mac Calendar
 
-    @objc private func toggleCalendar() {
-        let isConnected = calendarMenuItem?.title.hasPrefix("Disconnect") ?? false
-        if isConnected {
-            calendarMenuItem?.title = "Disconnecting…"
-            backendClient.disconnectGoogleCalendar { [weak self] _ in
-                DispatchQueue.main.async {
-                    self?.calendarMenuItem?.title = "Connect Google Calendar"
-                }
-            }
-        } else {
-            calendarMenuItem?.title = "Connecting…"
-            backendClient.connectGoogleCalendar { [weak self] email in
-                DispatchQueue.main.async {
-                    if let email {
-                        self?.calendarMenuItem?.title = "Disconnect Google Calendar (\(email))"
-                    } else {
-                        self?.calendarMenuItem?.title = "Connect Google Calendar"
-                    }
-                }
-            }
+    func refreshCalendarItem() {
+        let status = EKEventStore.authorizationStatus(for: .event)
+        switch status {
+        case .authorized, .fullAccess:
+            calendarMenuItem?.title  = "Calendar Access: Granted ✓"
+            calendarMenuItem?.action = nil          // nothing to tap — already good
+        case .denied, .restricted:
+            calendarMenuItem?.title  = "Calendar Access: Open Settings…"
+            calendarMenuItem?.action = #selector(handleCalendarItem)
+        case .notDetermined, .writeOnly:
+            calendarMenuItem?.title  = "Calendar Access: Grant Permission…"
+            calendarMenuItem?.action = #selector(handleCalendarItem)
+        @unknown default:
+            calendarMenuItem?.title  = "Calendar Access: Grant Permission…"
+            calendarMenuItem?.action = #selector(handleCalendarItem)
         }
     }
 
-    private func refreshCalendarLabel() {
-        backendClient.fetchCalendarEmail { [weak self] email in
-            DispatchQueue.main.async {
-                if let email {
-                    self?.calendarMenuItem?.title = "Disconnect Google Calendar (\(email))"
-                } else {
-                    self?.calendarMenuItem?.title = "Connect Google Calendar"
-                }
+    @objc private func handleCalendarItem() {
+        let status = EKEventStore.authorizationStatus(for: .event)
+        switch status {
+        case .authorized, .fullAccess:
+            break   // already granted, nothing to do
+        case .denied, .restricted:
+            // Can't re-prompt — send them to Settings
+            backendClient.openCalendarSettings()
+        default:
+            // notDetermined / writeOnly — ask for permission
+            backendClient.requestCalendarPermission { [weak self] _ in
+                self?.refreshCalendarItem()
             }
         }
     }

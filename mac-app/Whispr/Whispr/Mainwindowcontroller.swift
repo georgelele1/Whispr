@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Combine
+import EventKit
 
 final class MainWindowController: NSObject, ObservableObject {
     static let shared = MainWindowController()
@@ -104,7 +105,9 @@ struct SidebarView: View {
     @State private var selectedNav      : NavItem = .home
     @State private var selectedLanguage : String  = LanguageManager.shared.current
     @State private var syncStatus       : String  = ""
-    @State private var calendarEmail    : String  = "Not connected"
+
+    // Mac Calendar permission state — read from EventKit directly
+    @State private var calendarStatus: EKAuthorizationStatus = EKEventStore.authorizationStatus(for: .event)
 
     @State private var clearingHistory    : ClearState = .idle
     @State private var clearingDictionary : ClearState = .idle
@@ -115,6 +118,11 @@ struct SidebarView: View {
     @State private var showClearAlert : Bool = false
 
     private var backendClient: LocalBackendClient { AppManager.shared.localBackendClient }
+
+    // Convenience — is calendar access fully granted?
+    private var calendarGranted: Bool {
+        calendarStatus == .authorized || calendarStatus == .fullAccess
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -190,30 +198,29 @@ struct SidebarView: View {
 
                     Divider().padding(.vertical, 10)
 
-                    SettingsSection(title: "Google Calendar") {
+                    // ── Mac Calendar permission ────────────────
+                    SettingsSection(title: "Calendar") {
                         HStack(spacing: 8) {
                             Circle()
-                                .fill(calendarEmail == "Not connected" ? Color.gray : Color.green)
+                                .fill(calendarGranted ? Color.green : Color.orange)
                                 .frame(width: 7, height: 7)
-                            Text(calendarEmail == "Not connected" ? "Not connected" : calendarEmail)
+                            Text(calendarGranted ? "Access granted" : calendarStatusLabel)
                                 .font(.system(size: 12))
                                 .foregroundColor(.secondary)
                                 .lineLimit(1)
-                                .truncationMode(.middle)
                         }
-                        if calendarEmail == "Not connected" || calendarEmail == "Connecting…" {
-                            Button("Connect") { connectCalendar() }
+
+                        if !calendarGranted {
+                            Button(calendarButtonLabel) { handleCalendarButton() }
                                 .buttonStyle(.borderedProminent)
                                 .controlSize(.small)
                                 .tint(Color(red: 0.498, green: 0.467, blue: 0.867))
-                                .disabled(calendarEmail == "Connecting…")
-                        } else {
-                            HStack(spacing: 6) {
-                                Button("Switch")     { connectCalendar() }.buttonStyle(.bordered).controlSize(.small)
-                                Button("Disconnect") { disconnectCalendar() }
-                                    .buttonStyle(.bordered).controlSize(.small).foregroundColor(.red)
-                            }
                         }
+
+                        Text("Whispr reads Mac Calendar — no Google sign-in needed.")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     Divider().padding(.vertical, 10)
@@ -277,7 +284,7 @@ struct SidebarView: View {
         .frame(width: 220)
         .background(Color(NSColor.controlBackgroundColor))
         .onAppear {
-            loadCalendarEmail()
+            refreshCalendarStatus()
             backendClient.fetchLanguageFromBackend { lang in
                 DispatchQueue.main.async {
                     LanguageManager.shared.syncFromBackend(lang)
@@ -288,28 +295,45 @@ struct SidebarView: View {
         }
         .onReceive(controller.$selectedNav) { selectedNav = $0 }
         .onReceive(LanguageManager.shared.$current) { selectedLanguage = $0 }
+        // Re-check permission whenever the published value changes (e.g. from menu bar)
+        .onReceive(AppManager.shared.localBackendClient.$calendarPermission) { status in
+            calendarStatus = status
+        }
     }
 
-    // MARK: - Calendar
+    // MARK: - Calendar permission helpers
 
-    private func loadCalendarEmail() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            backendClient.fetchCalendarEmail { email in
-                DispatchQueue.main.async { calendarEmail = email ?? "Not connected" }
+    private var calendarStatusLabel: String {
+        switch calendarStatus {
+        case .authorized, .fullAccess:  return "Access granted"
+        case .denied:                   return "Access denied"
+        case .restricted:               return "Restricted by system"
+        case .notDetermined:            return "Not yet granted"
+        case .writeOnly:                return "Write-only access"
+        @unknown default:               return "Unknown"
+        }
+    }
+
+    private var calendarButtonLabel: String {
+        switch calendarStatus {
+        case .denied, .restricted:  return "Open Settings…"
+        default:                    return "Grant Access"
+        }
+    }
+
+    private func refreshCalendarStatus() {
+        calendarStatus = EKEventStore.authorizationStatus(for: .event)
+    }
+
+    private func handleCalendarButton() {
+        switch calendarStatus {
+        case .denied, .restricted:
+            backendClient.openCalendarSettings()
+        default:
+            backendClient.requestCalendarPermission { granted in
+                calendarStatus = EKEventStore.authorizationStatus(for: .event)
+                MenuBarController.shared.refreshCalendarItem()
             }
-        }
-    }
-
-    private func connectCalendar() {
-        calendarEmail = "Connecting…"
-        backendClient.connectGoogleCalendar { email in
-            DispatchQueue.main.async { calendarEmail = email ?? "Not connected" }
-        }
-    }
-
-    private func disconnectCalendar() {
-        backendClient.disconnectGoogleCalendar { _ in
-            DispatchQueue.main.async { calendarEmail = "Not connected" }
         }
     }
 

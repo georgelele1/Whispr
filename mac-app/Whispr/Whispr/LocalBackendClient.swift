@@ -1,6 +1,7 @@
 import Foundation
 import Combine
-
+import EventKit
+import AppKit
 struct DictionaryTerm {
     let phrase: String
     let type: String
@@ -24,6 +25,7 @@ struct DictionaryUpdateResult {
 
 final class LocalBackendClient: ObservableObject {
     @Published var isBackendAvailable = false
+    @Published var calendarPermission: EKAuthorizationStatus = .notDetermined
 
     private let timeout: TimeInterval = 300
 
@@ -32,6 +34,7 @@ final class LocalBackendClient: ObservableObject {
 
     init() {
         checkBackendAvailability()
+        refreshCalendarPermission()
 
         if isBackendAvailable {
             DispatchQueue.global(qos: .background).async {
@@ -72,6 +75,42 @@ final class LocalBackendClient: ObservableObject {
 
     func refreshRuntimePaths() {
         checkBackendAvailability()
+    }
+
+    // =========================================================
+    // Mac Calendar permission
+    // =========================================================
+
+    func refreshCalendarPermission() {
+        DispatchQueue.main.async {
+            self.calendarPermission = EKEventStore.authorizationStatus(for: .event)
+        }
+    }
+
+    /// Request calendar access. Calls back on main thread with the granted status.
+    func requestCalendarPermission(completion: @escaping (Bool) -> Void) {
+        let store = EKEventStore()
+
+        let handler: (Bool, Error?) -> Void = { granted, _ in
+            DispatchQueue.main.async {
+                self.calendarPermission = EKEventStore.authorizationStatus(for: .event)
+                completion(granted)
+            }
+        }
+
+        // Use the newer API on macOS 14+, fall back for earlier versions
+        if #available(macOS 14.0, *) {
+            store.requestFullAccessToEvents(completion: handler)
+        } else {
+            store.requestAccess(to: .event, completion: handler)
+        }
+    }
+
+    /// Open System Settings → Privacy → Calendars so the user can grant access.
+    func openCalendarSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars") {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     // =========================================================
@@ -281,8 +320,7 @@ final class LocalBackendClient: ObservableObject {
             }
 
             let outputString = String(data: outputData, encoding: .utf8) ?? ""
-            let errorString = String(data: errorData, encoding: .utf8) ?? ""
-
+            let errorString  = String(data: errorData,  encoding: .utf8) ?? ""
 
             DispatchQueue.main.async {
                 let trimmed = outputString.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -363,10 +401,8 @@ final class LocalBackendClient: ObservableObject {
             arguments: ["cli", "set-language", language]
         ) { result in
             switch result {
-            case .success:
-                completion?(true)
-            case .failure:
-                completion?(false)
+            case .success:  completion?(true)
+            case .failure:  completion?(false)
             }
         }
     }
@@ -396,85 +432,6 @@ final class LocalBackendClient: ObservableObject {
     }
 
     // =========================================================
-    // Google Calendar account management
-    // =========================================================
-
-    func fetchCalendarEmail(completion: @escaping (String?) -> Void) {
-        guard let backendScriptPath else {
-            completion(nil)
-            return
-        }
-
-        let calendarScript = URL(fileURLWithPath: backendScriptPath)
-            .deletingLastPathComponent()
-            .appendingPathComponent("gcalendar.py")
-            .path
-
-        runPythonCommand(script: calendarScript, arguments: ["get-email"]) { result in
-            switch result {
-            case .success(let output):
-                let email = output
-                    .components(separatedBy: .newlines)
-                    .compactMap { line -> String? in
-                        guard
-                            let data = line.data(using: .utf8),
-                            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                            let email = json["email"] as? String
-                        else {
-                            return nil
-                        }
-                        return email
-                    }
-                    .first
-
-                completion(email)
-
-            case .failure:
-                completion(nil)
-            }
-        }
-    }
-
-    func connectGoogleCalendar(completion: @escaping (String?) -> Void) {
-        guard let backendScriptPath else {
-            completion(nil)
-            return
-        }
-
-        let calendarScript = URL(fileURLWithPath: backendScriptPath)
-            .deletingLastPathComponent()
-            .appendingPathComponent("gcalendar.py")
-            .path
-
-        runPythonCommand(script: calendarScript, arguments: ["connect"]) { [weak self] _ in
-            guard let self else { return }
-            self.fetchCalendarEmail { email in
-                completion(email)
-            }
-        }
-    }
-
-    func disconnectGoogleCalendar(completion: @escaping (Bool) -> Void) {
-        guard let backendScriptPath else {
-            completion(false)
-            return
-        }
-
-        let calendarScript = URL(fileURLWithPath: backendScriptPath)
-            .deletingLastPathComponent()
-            .appendingPathComponent("gcalendar.py")
-            .path
-
-        runPythonCommand(script: calendarScript, arguments: ["disconnect"]) { result in
-            if case .success = result {
-                completion(true)
-            } else {
-                completion(false)
-            }
-        }
-    }
-
-    // =========================================================
     // Snippets
     // =========================================================
 
@@ -498,16 +455,12 @@ final class LocalBackendClient: ObservableObject {
                 return
             }
 
-            let lines = output.components(separatedBy: .newlines)
-
-            for line in lines {
+            for line in output.components(separatedBy: .newlines) {
                 guard
                     let data = line.data(using: .utf8),
                     let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                     let snippets = json["snippets"] as? [[String: Any]]
-                else {
-                    continue
-                }
+                else { continue }
 
                 completion(snippets)
                 return
@@ -524,11 +477,7 @@ final class LocalBackendClient: ObservableObject {
         }
 
         runPythonCommand(script: script, arguments: ["cli", "add", trigger, expansion]) { result in
-            if case .success = result {
-                completion(true)
-            } else {
-                completion(false)
-            }
+            completion((try? result.get()) != nil)
         }
     }
 
@@ -539,11 +488,7 @@ final class LocalBackendClient: ObservableObject {
         }
 
         runPythonCommand(script: script, arguments: ["cli", "remove", trigger]) { result in
-            if case .success = result {
-                completion(true)
-            } else {
-                completion(false)
-            }
+            completion((try? result.get()) != nil)
         }
     }
 
@@ -586,22 +531,18 @@ final class LocalBackendClient: ObservableObject {
 
             for line in output.components(separatedBy: .newlines) {
                 let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-
                 guard
                     trimmed.hasPrefix("{"),
                     let data = trimmed.data(using: .utf8),
                     let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                     let terms = extractTerms(json)
-                else {
-                    continue
-                }
+                else { continue }
 
                 completion(terms)
                 return
             }
 
             let fullOutput = output.trimmingCharacters(in: .whitespacesAndNewlines)
-
             if let data = fullOutput.data(using: .utf8),
                let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let terms = extractTerms(json) {
@@ -620,13 +561,8 @@ final class LocalBackendClient: ObservableObject {
         }
 
         let aliasStr = aliases.joined(separator: ",")
-
         runPythonCommand(script: script, arguments: ["cli", "add", phrase, aliasStr]) { result in
-            if case .success = result {
-                completion(true)
-            } else {
-                completion(false)
-            }
+            completion((try? result.get()) != nil)
         }
     }
 
@@ -637,11 +573,7 @@ final class LocalBackendClient: ObservableObject {
         }
 
         runPythonCommand(script: script, arguments: ["cli", "remove", phrase]) { result in
-            if case .success = result {
-                completion(true)
-            } else {
-                completion(false)
-            }
+            completion((try? result.get()) != nil)
         }
     }
 
@@ -666,9 +598,7 @@ final class LocalBackendClient: ObservableObject {
                     let data = line.data(using: .utf8),
                     let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                     let items = json["items"] as? [[String: Any]]
-                else {
-                    continue
-                }
+                else { continue }
 
                 completion(items)
                 return
@@ -683,77 +613,37 @@ final class LocalBackendClient: ObservableObject {
     // =========================================================
 
     func clearHistory(completion: @escaping (Bool) -> Void) {
-        guard let backendScriptPath else {
-            completion(false)
-            return
-        }
-
+        guard let backendScriptPath else { completion(false); return }
         runPythonCommand(script: backendScriptPath, arguments: ["cli", "clear-history"]) { result in
-            if case .success = result {
-                completion(true)
-            } else {
-                completion(false)
-            }
+            completion((try? result.get()) != nil)
         }
     }
 
     func clearDictionary(completion: @escaping (Bool) -> Void) {
-        guard let backendScriptPath else {
-            completion(false)
-            return
-        }
-
+        guard let backendScriptPath else { completion(false); return }
         runPythonCommand(script: backendScriptPath, arguments: ["cli", "clear-dictionary"]) { result in
-            if case .success = result {
-                completion(true)
-            } else {
-                completion(false)
-            }
+            completion((try? result.get()) != nil)
         }
     }
 
     func clearSnippets(completion: @escaping (Bool) -> Void) {
-        guard let backendScriptPath else {
-            completion(false)
-            return
-        }
-
+        guard let backendScriptPath else { completion(false); return }
         runPythonCommand(script: backendScriptPath, arguments: ["cli", "clear-snippets"]) { result in
-            if case .success = result {
-                completion(true)
-            } else {
-                completion(false)
-            }
+            completion((try? result.get()) != nil)
         }
     }
 
     func resetProfile(completion: @escaping (Bool) -> Void) {
-        guard let backendScriptPath else {
-            completion(false)
-            return
-        }
-
+        guard let backendScriptPath else { completion(false); return }
         runPythonCommand(script: backendScriptPath, arguments: ["cli", "reset-profile"]) { result in
-            if case .success = result {
-                completion(true)
-            } else {
-                completion(false)
-            }
+            completion((try? result.get()) != nil)
         }
     }
 
     func resetAll(completion: @escaping (Bool) -> Void) {
-        guard let backendScriptPath else {
-            completion(false)
-            return
-        }
-
+        guard let backendScriptPath else { completion(false); return }
         runPythonCommand(script: backendScriptPath, arguments: ["cli", "reset-all"]) { result in
-            if case .success = result {
-                completion(true)
-            } else {
-                completion(false)
-            }
+            completion((try? result.get()) != nil)
         }
     }
 
@@ -793,11 +683,7 @@ final class LocalBackendClient: ObservableObject {
         }
 
         runPythonCommand(script: backendScriptPath, arguments: ["cli", "save-profile", jsonStr]) { result in
-            if case .success = result {
-                completion(true)
-            } else {
-                completion(false)
-            }
+            completion((try? result.get()) != nil)
         }
     }
 
@@ -822,9 +708,7 @@ final class LocalBackendClient: ObservableObject {
                     let data = line.data(using: .utf8),
                     let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                     let items = json["insertions"] as? [[String: Any]]
-                else {
-                    continue
-                }
+                else { continue }
 
                 completion(items)
                 return
@@ -835,32 +719,16 @@ final class LocalBackendClient: ObservableObject {
     }
 
     func saveTextInsertion(label: String, value: String, completion: @escaping (Bool) -> Void) {
-        guard let backendScriptPath else {
-            completion(false)
-            return
-        }
-
+        guard let backendScriptPath else { completion(false); return }
         runPythonCommand(script: backendScriptPath, arguments: ["cli", "save-insertion", label, value]) { result in
-            if case .success = result {
-                completion(true)
-            } else {
-                completion(false)
-            }
+            completion((try? result.get()) != nil)
         }
     }
 
     func removeTextInsertion(label: String, completion: @escaping (Bool) -> Void) {
-        guard let backendScriptPath else {
-            completion(false)
-            return
-        }
-
+        guard let backendScriptPath else { completion(false); return }
         runPythonCommand(script: backendScriptPath, arguments: ["cli", "remove-insertion", label]) { result in
-            if case .success = result {
-                completion(true)
-            } else {
-                completion(false)
-            }
+            completion((try? result.get()) != nil)
         }
     }
 }
