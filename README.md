@@ -38,8 +38,7 @@ cd whispr
 ### 2. Install Python dependencies
 
 ```bash
-cd backend
-pip install -r requirements.txt
+run the script.sh in env script page
 ```
 
 ### 3. Open and build the Xcode project
