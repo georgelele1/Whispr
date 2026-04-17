@@ -13,6 +13,7 @@ import json
 from datetime import datetime
 
 import pytz
+from storage import get_agent_model
 from connectonion import Agent, after_user_input, before_llm
 
 from agents.plugins.lang       import inject_language
@@ -38,7 +39,7 @@ def _inject_date(agent) -> None:
 def _extract_intent(text: str) -> dict:
     """Single LLM call — decides mode, date/query, and calendar filter."""
     agent = Agent(
-        model="gpt-5.4",
+        model=get_agent_model(),
         name="whispr_calendar_intent",
         system_prompt=(
             "You extract calendar intent from voice input.\n\n"
