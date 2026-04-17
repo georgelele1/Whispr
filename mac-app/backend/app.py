@@ -319,25 +319,67 @@ if __name__ == "__main__":
         _exit_json({"ok": ok})
 
     elif command == "get-balance":
-        # Fetch connectonion credit balance via OpenOnion API
         try:
             import requests
-            api_key  = os.environ.get("OPENONION_API_KEY", "")
+            result = {"ok": True}
+
+            # ── Connectonion balance ──────────────────────────────
+            co_key   = os.environ.get("OPENONION_API_KEY", "")
             base_url = os.environ.get("OPENONION_BASE_URL", "https://oo.openonion.ai")
-            if not api_key:
-                _exit_json({"ok": False, "error": "OPENONION_API_KEY not set"})
-            auth_url = f"{base_url.rstrip('/')}/api/v1/auth/me"
-            resp     = requests.get(
-                auth_url,
-                headers={"Authorization": f"Bearer {api_key}"},
-                timeout=15,
-            )
-            if resp.status_code == 200:
-                data    = resp.json()
-                balance = data.get("balance_usd")
-                _exit_json({"ok": True, "balance_usd": balance, "raw": data})
-            else:
-                _exit_json({"ok": False, "error": f"HTTP {resp.status_code}"})
+            if co_key:
+                try:
+                    resp = requests.get(
+                        f"{base_url.rstrip('/')}/api/v1/auth/me",
+                        headers={"Authorization": f"Bearer {co_key}"},
+                        timeout=15,
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        result["connectonion"] = {
+                            "balance_usd":    data.get("balance_usd"),
+                            "credits_usd":    data.get("credits_usd"),
+                            "total_cost_usd": data.get("total_cost_usd"),
+                        }
+                except Exception as e:
+                    result["connectonion_error"] = str(e)
+
+            # ── OpenAI balance ────────────────────────────────────
+            oai_key = os.environ.get("OPENAI_API_KEY", "")
+            if oai_key:
+                try:
+                    # Try credit grants endpoint first (prepaid credits)
+                    resp = requests.get(
+                        "https://api.openai.com/v1/dashboard/billing/credit_grants",
+                        headers={"Authorization": f"Bearer {oai_key}"},
+                        timeout=15,
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        result["openai"] = {
+                            "balance_usd": data.get("total_available"),
+                            "granted_usd": data.get("total_granted"),
+                            "used_usd":    data.get("total_used"),
+                        }
+                    else:
+                        # Fallback: subscription endpoint for pay-as-you-go
+                        resp2 = requests.get(
+                            "https://api.openai.com/v1/dashboard/billing/subscription",
+                            headers={"Authorization": f"Bearer {oai_key}"},
+                            timeout=15,
+                        )
+                        if resp2.status_code == 200:
+                            data2 = resp2.json()
+                            result["openai"] = {
+                                "balance_usd": None,
+                                "plan":        data2.get("plan", {}).get("title", "Pay as you go"),
+                                "note":        "Pay-as-you-go — no prepaid balance",
+                            }
+                        else:
+                            result["openai_error"] = f"HTTP {resp.status_code}"
+                except Exception as e:
+                    result["openai_error"] = str(e)
+
+            _exit_json(result)
         except Exception as e:
             _exit_json({"ok": False, "error": str(e)})
 
