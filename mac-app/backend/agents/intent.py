@@ -8,14 +8,23 @@ route correctly based on previous exchange type.
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Ensure backend root is on sys.path when run from agents/ subdirectory
+_BACKEND_ROOT = Path(__file__).resolve().parent.parent
+if str(_BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_ROOT))
+
 from connectonion import Agent
+from storage import get_model, get_agent_model
 
 
 def _classify(text: str, session_context: str = "") -> str:
     session_hint = f"\n\nRecent conversation:\n{session_context}" if session_context else ""
 
     agent = Agent(
-        model="gpt-5.4",
+        model=get_agent_model(),
         name="whispr_intent_classifier",
         system_prompt=(
             "Classify this voice transcription into exactly one label:\n\n"
