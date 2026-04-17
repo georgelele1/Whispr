@@ -17,8 +17,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from connectonion.address import load
-from connectonion import Agent, host
-from connectonion.address import load
+from connectonion import Agent, host, transcribe
 
 from storage import (
     app_support_dir, now_ms, save_store,
@@ -43,17 +42,7 @@ CO_DIR   = BASE_DIR / ".co"
 # =========================================================
 
 def _transcribe_audio(audio_path: str) -> str:
-    agent = Agent(
-        model="gpt-5.4",
-        name="whispr_transcriber",
-        system_prompt=(
-            "Transcribe the audio exactly as spoken. "
-            "Output ONLY the transcribed words — no preamble, no labels, "
-            "no phrases like 'Here is the transcription' or '以下是逐字稿'. "
-            "First word of output must be the first spoken word."
-        ),
-    )
-    return str(agent.input(audio_path)).strip()
+    return str(transcribe(audio_path)).strip()
 
 
 # =========================================================
