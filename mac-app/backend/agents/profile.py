@@ -9,14 +9,9 @@ Pipeline roles:
 from __future__ import annotations
 
 import json
-import sys
 import threading
-import io as _io
 
-_real = sys.stdout
-sys.stdout = _io.StringIO()
 from connectonion import Agent
-sys.stdout = _real
 
 from storage import load_profile, save_profile, load_history, SUPPORTED_LANGUAGES
 
@@ -181,7 +176,6 @@ def _learn() -> None:
         profile["learned"]["last_updated"]  = len(load_history().get("items", []))
         save_profile(profile)
         invalidate_context_cache()
-        print(f"[profile] learned: {description[:80]}", file=sys.stderr)
 
     with _LEARN_LOCK:
         _LEARN_RUNNING = False

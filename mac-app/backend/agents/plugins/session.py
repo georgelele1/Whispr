@@ -6,20 +6,13 @@ of what was said and returned before — enabling continuations like:
   "add a PS at the end"
   "translate that to Chinese"
   "and also mention the deadline"
-
-Usage:
-    from agents.plugins.session import inject_session, session_remember, get_session_context
-
-    # In any agent:
-    agent = Agent(..., on_events=[after_user_input(inject_session)])
-
-    # After agent completes, store the result:
-    session_remember(raw_text, final_output)
 """
 from __future__ import annotations
 
+import re
+
 _SESSION: list[dict] = []
-_SESSION_MAX = 6  # keep last 3 exchanges (6 messages)
+_SESSION_MAX = 5  # keep last 3 exchanges (6 messages)
 
 
 def session_remember(raw: str, output: str) -> None:
@@ -46,7 +39,6 @@ def is_followup(text: str) -> bool:
     """True if text looks like a continuation of the previous exchange."""
     if not _SESSION:
         return False
-    import re
     return bool(re.match(
         r"(and |also |now |add |change |remove |translate |send |make it |"
         r"what does|explain|tell me more|what about|how about|"
@@ -56,11 +48,7 @@ def is_followup(text: str) -> bool:
 
 
 def inject_session(agent) -> None:
-    """
-    after_user_input — inject recent session history as system message.
-    Gives the LLM context of previous exchanges so it can handle
-    continuations and references to previous output.
-    """
+    """after_user_input — inject recent session history as system message."""
     context = get_session_context()
     if context:
         agent.current_session["messages"].append({
