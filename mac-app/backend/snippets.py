@@ -5,8 +5,6 @@ User-defined text shortcuts that expand on voice command.
   "give me my zoom link"  → "Zoom link (https://zoom.us/j/...)"
   "paste my email"        → "yanbo@example.com"
 
-Calendar is handled separately by agents/plugins/calendar.py
-
 Storage: ~/Library/Application Support/Whispr/snippets.json
 CLI:
     python snippets.py cli list
@@ -20,12 +18,6 @@ import json
 import sys
 from pathlib import Path
 from typing import Any, Dict
-
-import sys as _sys
-from pathlib import Path as _Path
-_backend_root = str(_Path(__file__).resolve().parent)
-if _backend_root not in _sys.path:
-    _sys.path.insert(0, _backend_root)
 
 from storage import app_support_dir
 
@@ -136,31 +128,23 @@ if __name__ == "__main__":
 
     command = sys.argv[2] if len(sys.argv) > 2 else "list"
 
-    try:
-        if command == "list":
-            print(json.dumps(list_all(), ensure_ascii=False))
+    if command == "list":
+        print(json.dumps(list_all(), ensure_ascii=False))
 
-        elif command == "add":
-            trigger   = sys.argv[3] if len(sys.argv) > 3 else ""
-            expansion = sys.argv[4] if len(sys.argv) > 4 else ""
-            print(json.dumps(add_snippet(trigger, expansion), ensure_ascii=False))
+    elif command == "add":
+        trigger   = sys.argv[3] if len(sys.argv) > 3 else ""
+        expansion = sys.argv[4] if len(sys.argv) > 4 else ""
+        print(json.dumps(add_snippet(trigger, expansion), ensure_ascii=False))
 
-        elif command == "remove":
-            trigger = sys.argv[3] if len(sys.argv) > 3 else ""
-            print(json.dumps(remove_snippet(trigger), ensure_ascii=False))
+    elif command == "remove":
+        trigger = sys.argv[3] if len(sys.argv) > 3 else ""
+        print(json.dumps(remove_snippet(trigger), ensure_ascii=False))
 
-        elif command == "toggle":
-            trigger = sys.argv[3] if len(sys.argv) > 3 else ""
-            enabled = sys.argv[4].lower() not in ("false", "0", "no") if len(sys.argv) > 4 else True
-            print(json.dumps(toggle_snippet(trigger, enabled), ensure_ascii=False))
+    elif command == "toggle":
+        trigger = sys.argv[3] if len(sys.argv) > 3 else ""
+        enabled = sys.argv[4].lower() not in ("false", "0", "no") if len(sys.argv) > 4 else True
+        print(json.dumps(toggle_snippet(trigger, enabled), ensure_ascii=False))
 
-        else:
-            print(json.dumps({"ok": False, "error": f"unknown command: {command}"}, ensure_ascii=False))
-            sys.exit(1)
-
-        sys.exit(0)
-
-    except Exception as e:
-        print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
-        print(f"ERROR: {e}", file=sys.stderr)
+    else:
+        print(json.dumps({"ok": False, "error": f"unknown command: {command}"}, ensure_ascii=False))
         sys.exit(1)

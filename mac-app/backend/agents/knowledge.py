@@ -9,25 +9,17 @@ Events:
   on_complete      → update_profile_background (debounced, daemon)
   on_complete      → show_summary        (visibility plugin)
   on_complete      → evaluate_output     (eval plugin)
-
-No snippet injection — output is an answer, not user dictation.
-No dictionary update — output is knowledge, not user speech.
 """
 from __future__ import annotations
 
 import re
-import sys
-import io as _io
 
-_real = sys.stdout
-sys.stdout = _io.StringIO()
 from connectonion import Agent, after_user_input, before_llm, on_complete
-sys.stdout = _real
 
-from agents.profile   import inject_profile, update_profile_background
+from agents.profile          import inject_profile, update_profile_background
 from agents.dictionary_agent import inject_dictionary
-from agents.plugins.lang    import inject_language
-from agents.plugins.session  import inject_session, session_remember, is_followup as session_followup
+from agents.plugins.lang     import inject_language
+from agents.plugins.session  import inject_session, session_remember
 from agents.plugins.visibility import show_summary
 from agents.plugins.eval       import generate_expected, evaluate_and_retry
 
@@ -49,19 +41,6 @@ def session_context() -> str:
         f"{'User' if m['role'] == 'user' else 'Assistant'}: {m['content'][:200]}"
         for m in _SESSION
     )
-
-
-def is_followup(text: str) -> bool:
-    if not _SESSION:
-        return False
-    return bool(re.match(
-        r"(what (does|is|are)|explain|tell me more|and |also |now "
-        r"|each (character|letter|symbol|variable|term|part|one)"
-        r"|what about|how about|give me (an )?example"
-        r"|can you explain|break (it|them|this) down"
-        r"|what does .{1,20} (mean|stand for|represent))",
-        text.strip(), re.IGNORECASE,
-    ))
 
 
 def _set_intent(agent) -> None:

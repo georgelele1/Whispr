@@ -3,35 +3,12 @@ app.py — Whispr main pipeline orchestrator.
 
 Responsibilities:
   - Transcribe audio → raw text
-  - Detect intent (2-layer: regex → LLM)
-  - Dispatch to the right subagent
+  - Detect intent and dispatch to the right subagent
   - Append to history
   - Expose CLI commands
-
-All context injection, language, eval, and background updates
-are handled inside each subagent via on_events — not here.
-
-File layout:
-  app.py
-  dictionary_agent.py
-  snippets.py
-  storage.py
-  gcalendar.py
-  agents/
-    profile.py
-    intent.py
-    refiner.py
-    knowledge.py
-    calendar.py
-  plugins/
-    __init__.py
-    language.py
-    visibility.py
-    eval.py
 """
 from __future__ import annotations
 
-import io as _io
 import json
 import os
 import sys
@@ -39,21 +16,12 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
-import sys as _sys
-from pathlib import Path as _Path
-_backend_root = str(_Path(__file__).resolve().parent)
-if _backend_root not in _sys.path:
-    _sys.path.insert(0, _backend_root)
-
-_real_stdout, _real_stderr = sys.stdout, sys.stderr
-sys.stdout = sys.stderr = _io.StringIO()
 from connectonion.address import load
-from connectonion import Agent, host, transcribe
-sys.stdout = _real_stdout
-sys.stderr = _real_stderr
+from connectonion import Agent, host
+from connectonion.address import load
 
 from storage import (
-    app_support_dir, now_ms, load_store, save_store,
+    app_support_dir, now_ms, save_store,
     load_profile, save_profile, load_history, append_history,
     get_target_language, set_target_language,
     SUPPORTED_LANGUAGES,
@@ -64,7 +32,7 @@ from agents.intent   import detect_intent
 from agents.plugins.session import session_remember
 from agents.refiner  import run as run_refiner
 from agents.knowledge import run as run_knowledge
-from agents.cal_agent       import run as run_calendar
+from agents.cal_agent import run as run_calendar
 
 BASE_DIR = Path(__file__).resolve().parent
 CO_DIR   = BASE_DIR / ".co"
@@ -75,17 +43,17 @@ CO_DIR   = BASE_DIR / ".co"
 # =========================================================
 
 def _transcribe_audio(audio_path: str) -> str:
-    import re
-    raw = str(transcribe(audio_path)).strip()
-    raw = re.sub(
-        r"^(sure,?\s+)?(here\s+is\s+the\s+transcription|transcription)[^:：]*[:：]\s*",
-        "", raw, flags=re.IGNORECASE | re.DOTALL,
-    ).strip()
-    raw = re.sub(
-        r"^(好的[，,\s]*)?(以下是(?:音檔|音频|音訊)?的?逐字稿如下|以下是轉錄結果)[：:\s]*",
-        "", raw, flags=re.IGNORECASE | re.DOTALL,
-    ).strip()
-    return raw.strip("「」\"' \n\t")
+    agent = Agent(
+        model="gpt-5.4",
+        name="whispr_transcriber",
+        system_prompt=(
+            "Transcribe the audio exactly as spoken. "
+            "Output ONLY the transcribed words — no preamble, no labels, "
+            "no phrases like 'Here is the transcription' or '以下是逐字稿'. "
+            "First word of output must be the first spoken word."
+        ),
+    )
+    return str(agent.input(audio_path)).strip()
 
 
 # =========================================================
@@ -108,20 +76,14 @@ def transcribe_and_enhance_impl(
         if not Path(audio_path).exists():
             return {"ok": False, "error": f"audio file not found: {audio_path}", "ts": now_ms()}
         raw_text = _transcribe_audio(audio_path)
-        print(f"[pipeline] transcribe {(time.perf_counter()-t0)*1000:.0f}ms  {raw_text[:60]!r}", file=sys.stderr)
 
     if not raw_text.strip():
         return {"ok": False, "error": "transcription returned empty", "ts": now_ms()}
 
     effective_app = app_name.strip() or "unknown"
 
-    # Clean fillers before intent detection so "uh uh what is AGOP" → "what is AGOP"
-    # L1 regex can then correctly match knowledge/calendar trigger words.
-    # raw_text is still passed to the agents unchanged — cleaning is only for routing.
     from agents.refiner import _quick_clean
-    clean_for_intent = _quick_clean(raw_text)
-    intent           = detect_intent(clean_for_intent)
-    print(f"[pipeline] intent={intent} clean={clean_for_intent[:60]!r}", file=sys.stderr)
+    intent = detect_intent(_quick_clean(raw_text))
 
     if intent == "calendar":
         final_text = run_calendar(raw_text, raw_text)
@@ -131,8 +93,6 @@ def transcribe_and_enhance_impl(
         final_text = run_refiner(raw_text, effective_app)
 
     session_remember(raw_text, final_text)
-
-    print(f"[pipeline] total {(time.perf_counter()-t0)*1000:.0f}ms", file=sys.stderr)
 
     append_history({
         "ts":              now_ms(),
@@ -150,36 +110,30 @@ def transcribe_and_enhance_impl(
 # Orchestrator agent
 # =========================================================
 
-def transcribe_and_enhance(audio_path, app_name="", target_language=""):
-    return transcribe_and_enhance_impl(audio_path=audio_path, app_name=app_name, target_language=target_language)
-
-
-def create_or_update_profile(name="", email="", organization="", role="", target_language=""):
-    profile = load_profile()
-    for key, val in {"name": name, "email": email, "organization": organization, "role": role}.items():
-        if str(val).strip():
-            profile[key] = str(val).strip()
-    if target_language.strip() in SUPPORTED_LANGUAGES:
-        profile.setdefault("preferences", {})["target_language"] = target_language.strip()
-    save_profile(profile)
-    return {"ok": True, "profile": profile}
-
-
-def get_profile():
-    return {"ok": True, "profile": load_profile()}
-
-
 def create_agent():
+    def transcribe_and_enhance(audio_path: str, app_name: str = "", target_language: str = ""):
+        return transcribe_and_enhance_impl(audio_path=audio_path, app_name=app_name, target_language=target_language)
+
+    def create_or_update_profile(name: str = "", email: str = "", organization: str = "", role: str = "", target_language: str = ""):
+        profile = load_profile()
+        for key, val in {"name": name, "email": email, "organization": organization, "role": role}.items():
+            if str(val).strip():
+                profile[key] = str(val).strip()
+        if target_language.strip() in SUPPORTED_LANGUAGES:
+            profile.setdefault("preferences", {})["target_language"] = target_language.strip()
+        save_profile(profile)
+        return {"ok": True, "profile": profile}
+
+    def get_profile():
+        return {"ok": True, "profile": load_profile()}
+
     agent = Agent(
         model="gpt-5",
         name="whispr_orchestrator",
         system_prompt="You are Whispr. You orchestrate audio transcription and refinement.",
     )
-    for fn in (create_or_update_profile, get_profile, transcribe_and_enhance):
-        for attr in ("add_tools", "add_tool"):
-            if hasattr(agent, attr):
-                getattr(agent, attr)(fn)
-                break
+    for fn in (transcribe_and_enhance, create_or_update_profile, get_profile):
+        agent.add_tool(fn)
     return agent
 
 
@@ -210,7 +164,6 @@ if __name__ == "__main__":
         audio_path      = sys.argv[3] if len(sys.argv) > 3 else ""
         app_name        = sys.argv[4] if len(sys.argv) > 4 else "unknown"
         target_language = sys.argv[5] if len(sys.argv) > 5 else ""
-        print(f"PATH: {audio_path}  EXISTS: {os.path.exists(audio_path)}", file=sys.stderr)
         result = transcribe_and_enhance_impl(audio_path, app_name, target_language)
         _exit_json({"output": result.get("final_text", "")})
 
@@ -249,8 +202,7 @@ if __name__ == "__main__":
         _exit_json({"ok": True, "profile": load_profile()})
 
     elif command == "get-history":
-        data  = load_history()
-        items = list(reversed(data.get("items", [])))
+        items = list(reversed(load_history().get("items", [])))
         _exit_json({"items": items[:100]})
 
     elif command == "save-profile":
