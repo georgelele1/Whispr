@@ -66,6 +66,7 @@ enum NavItem: String, CaseIterable {
     case history    = "History"
     case dictionary = "Dictionary"
     case snippets   = "Snippets"
+    case apiKeys    = "API Keys"
 
     var icon: String {
         switch self {
@@ -73,6 +74,7 @@ enum NavItem: String, CaseIterable {
         case .history:    return "clock"
         case .dictionary: return "book.closed"
         case .snippets:   return "text.bubble"
+        case .apiKeys:    return "key"
         }
     }
 }
@@ -90,6 +92,7 @@ struct NavigationContentView: View {
             case .history:    HistoryView(backendClient: AppManager.shared.localBackendClient)
             case .dictionary: DictionaryView(backendClient: AppManager.shared.localBackendClient)
             case .snippets:   SnippetsView(backendClient: AppManager.shared.localBackendClient)
+            case .apiKeys:    APIKeysView(backendClient: AppManager.shared.localBackendClient)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -105,6 +108,7 @@ struct SidebarView: View {
     @State private var selectedNav      : NavItem = .home
     @State private var selectedLanguage : String  = LanguageManager.shared.current
     @State private var syncStatus       : String  = ""
+    @State private var activeModel      : String  = AppManager.shared.localBackendClient.activeModel
 
     // Mac Calendar permission state — read from EventKit directly
     @State private var calendarStatus: EKAuthorizationStatus = EKEventStore.authorizationStatus(for: .event)
@@ -162,6 +166,38 @@ struct SidebarView: View {
             }
 
             Divider().padding(.top, 8)
+
+            // ── Active model indicator ─────────────────────────
+            Button {
+                selectedNav = .apiKeys
+                controller.navigate(to: .apiKeys)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "cpu")
+                        .font(.system(size: 11))
+                        .foregroundColor(Color(red: 0.498, green: 0.467, blue: 0.867))
+                    Text(activeModel)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .background(Color(NSColor.textBackgroundColor))
+                .cornerRadius(6)
+                .overlay(RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color(red: 0.498, green: 0.467, blue: 0.867).opacity(0.3), lineWidth: 0.5))
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+
+            Divider()
 
             // ── Settings ──────────────────────────────────────
             ScrollView(showsIndicators: false) {
@@ -295,6 +331,7 @@ struct SidebarView: View {
         }
         .onReceive(controller.$selectedNav) { selectedNav = $0 }
         .onReceive(LanguageManager.shared.$current) { selectedLanguage = $0 }
+        .onReceive(AppManager.shared.localBackendClient.$activeModel) { activeModel = $0 }
         // Re-check permission whenever the published value changes (e.g. from menu bar)
         .onReceive(AppManager.shared.localBackendClient.$calendarPermission) { status in
             calendarStatus = status
