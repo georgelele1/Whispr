@@ -66,6 +66,7 @@ enum NavItem: String, CaseIterable {
     case history    = "History"
     case dictionary = "Dictionary"
     case snippets   = "Snippets"
+    case shortcuts  = "Shortcuts"
     case apiKeys    = "API Keys"
 
     var icon: String {
@@ -74,6 +75,7 @@ enum NavItem: String, CaseIterable {
         case .history:    return "clock"
         case .dictionary: return "book.closed"
         case .snippets:   return "text.bubble"
+        case .shortcuts:  return "keyboard"
         case .apiKeys:    return "key"
         }
     }
@@ -92,11 +94,13 @@ struct NavigationContentView: View {
             case .history:    HistoryView(backendClient: AppManager.shared.localBackendClient)
             case .dictionary: DictionaryView(backendClient: AppManager.shared.localBackendClient)
             case .snippets:   SnippetsView(backendClient: AppManager.shared.localBackendClient)
+            case .shortcuts:  ShortcutsView()
             case .apiKeys:    APIKeysView(backendClient: AppManager.shared.localBackendClient)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onReceive(controller.$selectedNav) { currentNav = $0 }
+        .withWhisprTour()
     }
 }
 
@@ -204,8 +208,38 @@ struct SidebarView: View {
                 VStack(alignment: .leading, spacing: 0) {
 
                     SettingsSection(title: "Hotkeys") {
-                        HotkeyRow(label: "Start", keys: ["⌥", "Space"])
-                        HotkeyRow(label: "Stop",  keys: ["⌥", "S"])
+                        Button {
+                            selectedNav = .shortcuts
+                            controller.navigate(to: .shortcuts)
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    HStack(spacing: 4) {
+                                        Text("Start").font(.system(size: 12)).foregroundColor(.primary)
+                                        Spacer()
+                                        Text(ShortcutManager.shared.startShortcut.displayString)
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .foregroundColor(.secondary)
+                                    }
+                                    HStack(spacing: 4) {
+                                        Text("Stop").font(.system(size: 12)).foregroundColor(.primary)
+                                        Spacer()
+                                        Text(ShortcutManager.shared.stopShortcut.displayString)
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.secondary)
+                                    .padding(.leading, 4)
+                            }
+                            .padding(.horizontal, 10).padding(.vertical, 8)
+                            .background(Color(NSColor.textBackgroundColor))
+                            .cornerRadius(6)
+                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.15), lineWidth: 0.5))
+                        }
+                        .buttonStyle(.plain)
                     }
 
                     Divider().padding(.vertical, 10)
