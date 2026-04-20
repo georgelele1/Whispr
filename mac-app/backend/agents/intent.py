@@ -58,6 +58,7 @@ def detect_intent(text: str) -> str:
             if msg["role"] == "assistant":
                 content = msg["content"]
                 if len(content) > 100 or any(
+                    #keyward in content
                     kw in content.lower() for kw in
                     ["formula", "equation", "defined as", "refers to", "is a type",
                      "algorithm", "protocol", "theorem", "law of", "concept"]
