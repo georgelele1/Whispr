@@ -326,6 +326,8 @@ if __name__ == "__main__":
         _exit_json({"ok": True})
 
     elif command == "reset-all":
+        from agents.plugins.session import clear_session
+        clear_session()
         save_store("history.json",    {"items": []})
         save_store("dictionary.json", {"terms": []})
         (app_support_dir() / "snippets.json").write_text(
