@@ -30,21 +30,33 @@ def _session_path() -> Path:
     return base / "session.json"
 
 
+SESSION_TTL_HOURS = 1  # session expires after 60 minutes of inactivity
+
+
 def _load() -> list[dict]:
     path = _session_path()
     if not path.exists():
         return []
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, list) else []
+        import time
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return []
+        # Expire session if inactive for more than TTL
+        last_updated = raw.get("updated_at", 0)
+        if time.time() - last_updated > SESSION_TTL_HOURS * 3600:
+            return []
+        return raw.get("messages", [])
     except Exception:
         return []
 
 
 def _save(session: list[dict]) -> None:
     try:
+        import time
         _session_path().write_text(
-            json.dumps(session, ensure_ascii=False, indent=2), encoding="utf-8"
+            json.dumps({"updated_at": time.time(), "messages": session}, ensure_ascii=False, indent=2),
+            encoding="utf-8"
         )
     except Exception:
         pass
