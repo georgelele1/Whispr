@@ -114,7 +114,6 @@ struct SidebarView: View {
     @State private var syncStatus       : String  = ""
     @State private var activeModel      : String  = AppManager.shared.localBackendClient.activeModel
 
-    // Mac Calendar permission state — read from EventKit directly
     @State private var calendarStatus: EKAuthorizationStatus = EKEventStore.authorizationStatus(for: .event)
 
     @State private var clearingHistory    : ClearState = .idle
@@ -127,7 +126,6 @@ struct SidebarView: View {
 
     private var backendClient: LocalBackendClient { AppManager.shared.localBackendClient }
 
-    // Convenience — is calendar access fully granted?
     private var calendarGranted: Bool {
         calendarStatus == .authorized || calendarStatus == .fullAccess
     }
@@ -366,7 +364,6 @@ struct SidebarView: View {
         .onReceive(controller.$selectedNav) { selectedNav = $0 }
         .onReceive(LanguageManager.shared.$current) { selectedLanguage = $0 }
         .onReceive(AppManager.shared.localBackendClient.$activeModel) { activeModel = $0 }
-        // Re-check permission whenever the published value changes (e.g. from menu bar)
         .onReceive(AppManager.shared.localBackendClient.$calendarPermission) { status in
             calendarStatus = status
         }
@@ -401,7 +398,7 @@ struct SidebarView: View {
         case .denied, .restricted:
             backendClient.openCalendarSettings()
         default:
-            backendClient.requestCalendarPermission { granted in
+            backendClient.requestCalendarPermission { _ in
                 calendarStatus = EKEventStore.authorizationStatus(for: .event)
                 MenuBarController.shared.refreshCalendarItem()
             }
@@ -577,28 +574,5 @@ struct SettingsSection<Content: View>: View {
                 .textCase(.uppercase).tracking(0.5).padding(.horizontal, 14)
             VStack(alignment: .leading, spacing: 4) { content() }.padding(.horizontal, 12)
         }
-    }
-}
-
-struct HotkeyRow: View {
-    let label: String; let keys: [String]
-    var body: some View {
-        HStack {
-            Text(label).font(.system(size: 12))
-            Spacer()
-            HStack(spacing: 3) {
-                ForEach(keys, id: \.self) { key in
-                    Text(key).font(.system(size: 10, design: .monospaced))
-                        .padding(.horizontal, 5).padding(.vertical, 2)
-                        .background(Color(NSColor.controlBackgroundColor))
-                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.3), lineWidth: 0.5))
-                        .cornerRadius(4)
-                }
-            }
-        }
-        .padding(.horizontal, 10).padding(.vertical, 7)
-        .background(Color(NSColor.textBackgroundColor))
-        .cornerRadius(6)
-        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.15), lineWidth: 0.5))
     }
 }

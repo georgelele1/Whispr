@@ -45,13 +45,8 @@ final class LocalBackendClient: ObservableObject {
         refreshCalendarPermission()
 
         if isBackendAvailable {
-            // Sync active model from backend on launch
             fetchModelFromBackend { [weak self] model in
                 if let model { self?.activeModel = model }
-            }
-            // Background dictionary refresh
-            DispatchQueue.global(qos: .background).async {
-                self.runDictionaryUpdate { _ in }
             }
         }
     }
@@ -113,31 +108,6 @@ final class LocalBackendClient: ObservableObject {
     }
 
     // =========================================================
-    // Debug
-    // =========================================================
-
-    /// Flip to true to print every command, stdout, and stderr to the Xcode console.
-    static var debugMode = true
-
-    private func debugLog(_ label: String, script: String, args: [String], out: String, err: String, status: Int32) {
-        guard Self.debugMode else { return }
-        // args may already contain script as first element (transcribeAudio passes process.arguments)
-        // so only prepend script if it's not already there
-        let allArgs = args.first == script ? args : [script] + args
-        let cmd = allArgs.joined(separator: " ")
-        print("""
-        ┌─[Whispr Debug]──────────────────────────────
-        │ CMD : \(cmd)
-        │ EXIT: \(status)
-        │ STDOUT:
-        \(out.isEmpty ? "  (empty)" : out.split(separator: "\n").map { "  " + $0 }.joined(separator: "\n"))
-        │ STDERR:
-        \(err.isEmpty ? "  (empty)" : err.split(separator: "\n").map { "  " + $0 }.joined(separator: "\n"))
-        └─────────────────────────────────────────────
-        """)
-    }
-
-    // =========================================================
     // Core Python runner
     // =========================================================
 
@@ -170,9 +140,6 @@ final class LocalBackendClient: ObservableObject {
 
             let out = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-
-            self.debugLog("runPythonCommand", script: script, args: arguments,
-                          out: out, err: err, status: process.terminationStatus)
 
             // Strip connectonion noise lines ([env], [co], [agent]) that pollute stdout
             let cleanOut = out.components(separatedBy: .newlines)
@@ -273,7 +240,6 @@ final class LocalBackendClient: ObservableObject {
             let process = Process()
             process.currentDirectoryURL = URL(fileURLWithPath: backendScriptPath).deletingLastPathComponent()
             process.executableURL       = URL(fileURLWithPath: pythonPath)
-            // Model is read from backend storage — no need to pass it as an argument
             process.arguments = [
                 backendScriptPath,
                 "cli", "transcribe",
@@ -311,9 +277,6 @@ final class LocalBackendClient: ObservableObject {
 
             let outputString = String(data: outputData, encoding: .utf8) ?? ""
             let errorString  = String(data: errorData,  encoding: .utf8) ?? ""
-
-            self.debugLog("transcribeAudio", script: backendScriptPath, args: process.arguments ?? [],
-                          out: outputString, err: errorString, status: process.terminationStatus)
 
             DispatchQueue.main.async {
                 let trimmed = outputString.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -362,7 +325,6 @@ final class LocalBackendClient: ObservableObject {
     /// Lines look like: [co] ● gemini-3-flash-preview · 282 tok · $0.0003 · 0% ctx
     /// We sum all $ amounts found across all agent runs in one transcription.
     private func parseTotalCost(from stderr: String) -> Double? {
-        // Match $0.0000 patterns — only on [co] ● lines (completed agent calls)
         let pattern = #"\[co\] ●[^\n]*\$([0-9]+\.[0-9]+)"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
         let range   = NSRange(stderr.startIndex..., in: stderr)
@@ -623,34 +585,5 @@ final class LocalBackendClient: ObservableObject {
         runPythonCommand(script: backendScriptPath, arguments: ["cli", "save-profile", jsonStr]) { result in
             completion((try? result.get()) != nil)
         }
-    }
-
-    // =========================================================
-    // Text insertions
-    // =========================================================
-
-    func listTextInsertions(completion: @escaping ([[String: Any]]) -> Void) {
-        guard let backendScriptPath else { completion([]); return }
-        runPythonCommand(script: backendScriptPath, arguments: ["cli", "list-insertions"]) { result in
-            guard case .success(let output) = result else { completion([]); return }
-            for line in output.components(separatedBy: .newlines) {
-                guard let data  = line.data(using: .utf8),
-                      let json  = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let items = json["insertions"] as? [[String: Any]]
-                else { continue }
-                completion(items); return
-            }
-            completion([])
-        }
-    }
-
-    func saveTextInsertion(label: String, value: String, completion: @escaping (Bool) -> Void) {
-        guard let s = backendScriptPath else { completion(false); return }
-        runPythonCommand(script: s, arguments: ["cli", "save-insertion", label, value]) { r in completion((try? r.get()) != nil) }
-    }
-
-    func removeTextInsertion(label: String, completion: @escaping (Bool) -> Void) {
-        guard let s = backendScriptPath else { completion(false); return }
-        runPythonCommand(script: s, arguments: ["cli", "remove-insertion", label]) { r in completion((try? r.get()) != nil) }
     }
 }
