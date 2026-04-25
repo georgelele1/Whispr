@@ -297,8 +297,8 @@ def _load_env() -> Dict[str, str]:
 def _save_env(data: Dict[str, str]) -> None:
     path = _env_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    lines = [f"{k}={v}" for k, v in data.items()]
+    # Exclude empty keys and values that could corrupt the .env file
+    lines = [f"{k}={v}" for k, v in data.items() if k and v]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -347,18 +347,19 @@ def get_api_key(provider: str = "openai") -> str:
 
 def set_api_key(key: str, provider: str = "openai") -> bool:
     key = str(key or "").strip()
-
     if not key:
         return False
-
-    env_key = _provider_env_key(provider)
-    data = _load_env()
-    data[env_key] = key
-
-    _save_env(data)
-    os.environ[env_key] = key
-
-    return True
+    try:
+        env_key = _provider_env_key(provider)
+        if not env_key:
+            return False
+        data = _load_env()
+        data[env_key] = key
+        _save_env(data)
+        os.environ[env_key] = key
+        return True
+    except Exception:
+        return False
 
 
 def remove_api_key(provider: str = "openai") -> bool:
