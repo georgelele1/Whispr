@@ -13,19 +13,12 @@ Session keys:
 """
 from __future__ import annotations
 
-
 from connectonion import Agent
-
-from storage import get_target_language
-from storage import get_agent_model
+from storage import get_target_language, get_agent_model
 
 MAX_RETRIES = 2
 
-_CRITERIA = {
-    "refiner":   "Clean text, no fillers, correct language, formatted for active app.",
-    "knowledge": "Direct answer, no preamble, factually accurate, correct domain.",
-    "calendar":  "Actual schedule data or clear no-events message, correct date.",
-}
+_CRITERIA = "Clean transcription: no fillers, correct language, formatted appropriately for the active app."
 
 
 def _get_last_assistant(messages: list) -> str:
@@ -77,23 +70,20 @@ def generate_expected(agent) -> None:
     if not user_input:
         return
 
-    intent   = agent.current_session.get("whispr_intent", "refiner")
-    criteria = _CRITERIA.get(intent, _CRITERIA["refiner"])
-    lang     = get_target_language()
+    lang = get_target_language()
 
     evaluator = Agent(
         model=get_agent_model(),
         name="whispr_eval_expected",
         system_prompt=(
-            "Describe what a correct output looks like for a voice transcription assistant. "
+            "Describe what a correct output looks like for a voice transcription cleaner. "
             "1-2 sentences, specific to the input. No examples."
         ),
     )
     expected = str(evaluator.input(
         f"Input: {user_input}\n"
-        f"Intent: {intent}\n"
         f"Language: {lang}\n"
-        f"Criteria: {criteria}"
+        f"Criteria: {_CRITERIA}"
     )).strip()
 
     agent.current_session["expected"] = expected
@@ -135,6 +125,11 @@ def evaluate_and_retry(agent) -> None:
     })
 
     corrected = str(agent.input(correction_prompt)).strip().strip('"').strip("'")
+
+    # Restore any snippet placeholders the retry LLM may have left in the output
+    placeholders = agent.current_session.get("snippet_placeholders", {})
+    for placeholder, expansion in placeholders.items():
+        corrected = corrected.replace(placeholder, expansion)
 
     for msg in reversed(agent.current_session.get("messages", [])):
         if msg.get("role") == "assistant":
