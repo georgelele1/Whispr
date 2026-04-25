@@ -2,25 +2,27 @@ import SwiftUI
 
 struct APIKeysView: View {
 
-    @State private var selectedModel      : String  = AppManager.shared.localBackendClient.activeModel
-    @State private var apiKeyInput        : String  = ""
-    @State private var hasStoredKey       : Bool    = false
-    @State private var isLoadingModel     : Bool    = false
-    @State private var isSavingKey        : Bool    = false
-    @State private var statusMessage      : String  = ""
-    @State private var isError            : Bool    = false
-    @State private var isLoadingBalance   : Bool    = false
-    @State private var balanceError       : String? = nil
-    @State private var lastCost           : Double? = nil
-    @State private var coBalance          : Double? = nil
-    @State private var coUsed             : Double? = nil
-    @State private var oaiBalance         : Double? = nil
-    @State private var oaiPlan            : String? = nil
+    @ObservedObject private var client = AppManager.shared.localBackendClient
+
+    @State private var selectedModel    : String  = AppManager.shared.localBackendClient.activeModel
+    @State private var apiKeyInput      : String  = ""
+    @State private var detectedProvider : Config.Provider? = nil
+    @State private var isDetecting      : Bool    = false
+    @State private var isSavingKey      : Bool    = false
+    @State private var isLoadingModel   : Bool    = false
+    @State private var statusMessage    : String  = ""
+    @State private var isError          : Bool    = false
+    @State private var isLoadingBalance : Bool    = false
+    @State private var lastCost         : Double? = nil
+    @State private var coBalance        : Double? = nil
+    @State private var coUsed           : Double? = nil
 
     var backendClient: LocalBackendClient?
     private let accent = Color(red: 0.498, green: 0.467, blue: 0.867)
 
-    private var needsKey: Bool { Config.requiresAPIKey(selectedModel) }
+    private var activeClient: LocalBackendClient {
+        backendClient ?? AppManager.shared.localBackendClient
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -30,12 +32,12 @@ struct APIKeysView: View {
                 VStack(alignment: .leading, spacing: 24) {
                     balanceSection
                     modelPicker
-                    if needsKey { keySection }
+                    keySection
                 }
                 .padding(24)
             }
         }
-        .frame(width: 560, height: needsKey ? 460 : 360)
+        .frame(width: 580, height: 520)
         .onAppear {
             loadCurrentState()
             loadBalance()
@@ -47,8 +49,8 @@ struct APIKeysView: View {
     private var header: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Model & API Key").font(.title2).bold()
-                Text("Gemini models are included via connectonion — no API key needed. OpenAI models require your own key.")
+                Text("Model & API Keys").font(.title2).bold()
+                Text("Google Gemini is included free via connectonion. Add keys for other providers to unlock their models.")
                     .font(.caption).foregroundColor(.secondary)
             }
             Spacer()
@@ -57,41 +59,56 @@ struct APIKeysView: View {
         .padding()
     }
 
-    // MARK: - Model picker
+    // MARK: - Model picker (only shows unlocked providers)
 
     private var modelPicker: some View {
         VStack(alignment: .leading, spacing: 14) {
             sectionLabel("Choose a model", icon: "cpu")
 
-            ForEach(Config.modelsByProvider, id: \.provider) { group in
+            ForEach(Config.modelsByProvider, id: \.provider.id) { group in
+                let unlocked = client.storedProviders.contains(group.provider.id)
+
                 VStack(alignment: .leading, spacing: 8) {
 
-                    // Provider label
+                    // Provider header
                     HStack(spacing: 6) {
-                        Image(systemName: group.provider == "Google" ? "star.fill" : "key")
+                        Image(systemName: group.provider.free ? "star.fill" : (unlocked ? "checkmark.shield.fill" : "lock"))
                             .font(.system(size: 10))
                             .foregroundColor(providerColor(group.provider))
-                        Text(group.provider)
+                        Text(group.provider.displayName)
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundColor(providerColor(group.provider))
-                        if group.provider == "Google" {
-                            Text("included via connectonion")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
+                        if group.provider.free {
+                            Text("included free")
+                                .font(.caption2).foregroundColor(.secondary)
                                 .padding(.horizontal, 6).padding(.vertical, 2)
                                 .background(Color.secondary.opacity(0.1))
+                                .cornerRadius(4)
+                        } else if unlocked {
+                            Text("key saved")
+                                .font(.caption2).foregroundColor(.green)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.green.opacity(0.08))
+                                .cornerRadius(4)
+                        } else {
+                            Text("add key to unlock")
+                                .font(.caption2).foregroundColor(.secondary)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.secondary.opacity(0.08))
                                 .cornerRadius(4)
                         }
                     }
 
-                    // Model pills
+                    // Model pills — greyed out if locked
                     HStack(spacing: 8) {
                         ForEach(group.models) { option in
                             ModelPill(
                                 option:     option,
                                 isSelected: selectedModel == option.id,
+                                isLocked:   !unlocked,
                                 accent:     accent
                             ) {
+                                guard unlocked else { return }
                                 selectModel(option.id)
                             }
                         }
@@ -101,52 +118,93 @@ struct APIKeysView: View {
         }
     }
 
-    // MARK: - API key section (OpenAI only)
+    // MARK: - API key section
 
     private var keySection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             Divider()
-            sectionLabel("OpenAI API Key", icon: "lock")
+            sectionLabel("API Keys", icon: "key")
 
-            if hasStoredKey {
-                // Key already saved — show status + option to replace or remove
+            // Stored keys per paid provider
+            ForEach(Config.providers.filter { !$0.free }, id: \.id) { provider in
+                let hasKey = client.storedProviders.contains(provider.id)
                 HStack(spacing: 10) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
-                    Text("API key stored")
+                    Image(systemName: hasKey ? "checkmark.circle.fill" : "circle")
+                        .foregroundColor(hasKey ? .green : .secondary)
+                    Text(provider.displayName)
                         .font(.subheadline)
                     Spacer()
-                    Button("Replace") { hasStoredKey = false; apiKeyInput = "" }
-                        .buttonStyle(.bordered).controlSize(.small)
-                    Button("Remove") { removeKey() }
-                        .buttonStyle(.bordered).controlSize(.small)
-                        .tint(.red)
-                }
-                .padding(12)
-                .background(Color.green.opacity(0.06))
-                .cornerRadius(8)
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.green.opacity(0.2), lineWidth: 0.5))
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Paste your OpenAI API key below. It's stored locally in a .env file — never sent anywhere else.")
-                        .font(.caption).foregroundColor(.secondary)
-
-                    HStack(spacing: 10) {
-                        SecureField("sk-…", text: $apiKeyInput)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: .infinity)
-
-                        Button(action: saveKey) {
-                            if isSavingKey {
-                                ProgressView().scaleEffect(0.75).frame(width: 60, height: 22)
-                            } else {
-                                Text("Save")
-                            }
+                    if hasKey {
+                        Button("Replace") {
+                            apiKeyInput      = ""
+                            detectedProvider = provider
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(accent)
-                        .disabled(apiKeyInput.trimmingCharacters(in: .whitespaces).isEmpty || isSavingKey)
+                        .buttonStyle(.bordered).controlSize(.small)
+                        Button("Remove") { removeKey(provider: provider.id) }
+                            .buttonStyle(.bordered).controlSize(.small)
+                            .tint(.red)
                     }
+                }
+                .padding(10)
+                .background(hasKey ? Color.green.opacity(0.05) : Color(NSColor.controlBackgroundColor))
+                .cornerRadius(8)
+                .overlay(RoundedRectangle(cornerRadius: 8)
+                    .stroke(hasKey ? Color.green.opacity(0.2) : Color.secondary.opacity(0.12), lineWidth: 0.5))
+            }
+
+            // Key input — auto-detects provider on paste
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Paste an API key — provider is detected automatically from the key prefix.")
+                    .font(.caption).foregroundColor(.secondary)
+
+                HStack(spacing: 10) {
+                    ZStack(alignment: .leading) {
+                        SecureField("sk-… or AIza… or sk-ant-…", text: $apiKeyInput)
+                            .textFieldStyle(.roundedBorder)
+                            .onChange(of: apiKeyInput) { newValue in
+                                detectFromInput(newValue)
+                            }
+                    }
+
+                    // Detected provider badge
+                    if let detected = detectedProvider {
+                        HStack(spacing: 4) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 11))
+                                .foregroundColor(.green)
+                            Text(detected.displayName)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(.green)
+                        }
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(Color.green.opacity(0.08))
+                        .cornerRadius(6)
+                    } else if !apiKeyInput.isEmpty {
+                        HStack(spacing: 4) {
+                            Image(systemName: "questionmark.circle")
+                                .font(.system(size: 11))
+                                .foregroundColor(.orange)
+                            Text("Unknown")
+                                .font(.system(size: 11))
+                                .foregroundColor(.orange)
+                        }
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(Color.orange.opacity(0.08))
+                        .cornerRadius(6)
+                    }
+
+                    Button(action: saveKey) {
+                        if isSavingKey {
+                            ProgressView().scaleEffect(0.75).frame(width: 60, height: 22)
+                        } else {
+                            Text("Save")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(accent)
+                    .disabled(apiKeyInput.trimmingCharacters(in: .whitespaces).isEmpty
+                              || detectedProvider == nil
+                              || isSavingKey)
                 }
             }
 
@@ -170,39 +228,24 @@ struct APIKeysView: View {
             sectionLabel("Usage & balance", icon: "coloncurrencysign.circle")
 
             HStack(spacing: 10) {
-                // Last call cost
                 balanceCard(
                     title: "Last call",
                     value: lastCost.map { $0 < 0.0001 ? "<$0.0001" : String(format: "$%.4f", $0) } ?? "—",
                     color: .primary
                 )
-
-                // Connectonion balance
                 balanceCard(
                     title: "Connectonion",
                     value: coBalance.map { String(format: "$%.2f", $0) } ?? "—",
                     subtitle: coUsed.map { String(format: "$%.4f used", $0) },
                     color: (coBalance ?? 0) < 1 ? .orange : .green
                 )
-
-                // OpenAI balance
-                balanceCard(
-                    title: "OpenAI",
-                    value: oaiBalance.map { String(format: "$%.2f", $0) } ?? (oaiPlan ?? (hasStoredKey ? "—" : "No key")),
-                    subtitle: oaiPlan != nil && oaiBalance == nil ? oaiPlan : nil,
-                    color: oaiBalance == nil ? .secondary : ((oaiBalance ?? 0) < 2 ? .orange : .green)
-                )
-
                 if isLoadingBalance {
                     ProgressView().scaleEffect(0.7)
                 } else {
                     Button { loadBalance() } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 12))
-                            .foregroundColor(.secondary)
+                        Image(systemName: "arrow.clockwise").font(.system(size: 12)).foregroundColor(.secondary)
                     }
-                    .buttonStyle(.plain)
-                    .help("Refresh balances")
+                    .buttonStyle(.plain).help("Refresh balances")
                 }
             }
         }
@@ -211,12 +254,8 @@ struct APIKeysView: View {
     private func balanceCard(title: String, value: String, subtitle: String? = nil, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title).font(.caption).foregroundColor(.secondary)
-            Text(value)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundColor(color)
-            if let subtitle {
-                Text(subtitle).font(.caption2).foregroundColor(.secondary)
-            }
+            Text(value).font(.system(size: 14, weight: .semibold)).foregroundColor(color)
+            if let subtitle { Text(subtitle).font(.caption2).foregroundColor(.secondary) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
@@ -235,88 +274,96 @@ struct APIKeysView: View {
             .tracking(0.4)
     }
 
-    private func providerColor(_ provider: String) -> Color {
-        provider == "Google" ? Color(red: 0.26, green: 0.52, blue: 0.96) : Color(red: 0.07, green: 0.73, blue: 0.49)
+    private func providerColor(_ provider: Config.Provider) -> Color {
+        switch provider.id {
+        case "google":    return Color(red: 0.26, green: 0.52, blue: 0.96)
+        case "openai":    return Color(red: 0.07, green: 0.73, blue: 0.49)
+        case "anthropic": return Color(red: 0.80, green: 0.40, blue: 0.20)
+        default:          return .secondary
+        }
     }
 
     // MARK: - Actions
 
+    private func detectFromInput(_ key: String) {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        detectedProvider = trimmed.isEmpty ? nil : Config.detectProvider(for: trimmed)
+    }
+
     private func loadBalance() {
         isLoadingBalance = true
-        balanceError     = nil
-        backendClient?.fetchBalance { result, err in
+        activeClient.fetchBalance { result, _ in
             DispatchQueue.main.async {
                 self.isLoadingBalance = false
                 self.coBalance        = result?.connectonionBalance
                 self.coUsed           = result?.connectonionUsed
-                self.oaiBalance       = result?.openAIBalance
-                self.oaiPlan          = result?.openAIPlan
-                self.balanceError     = result == nil ? (err ?? "Unavailable") : nil
             }
         }
     }
 
     private func loadCurrentState() {
-        // Sync last known values from AppManager
-        lastCost   = AppManager.shared.lastCost
-        coBalance  = AppManager.shared.lastConnectonionBalance
-        oaiBalance = AppManager.shared.lastOpenAIBalance
-        oaiPlan    = AppManager.shared.lastOpenAIPlan
+        lastCost  = AppManager.shared.lastCost
+        coBalance = AppManager.shared.lastConnectonionBalance
 
         isLoadingModel = true
-        backendClient?.fetchModelFromBackend { model in
+        activeClient.fetchModelFromBackend { model in
             DispatchQueue.main.async {
-                // Fix: fall back to activeModel instead of defaultModel so
-                // the picker never resets to Gemini if the backend returns nil
                 self.selectedModel  = model ?? AppManager.shared.localBackendClient.activeModel
                 self.isLoadingModel = false
             }
         }
-        backendClient?.checkAPIKeyExists { exists in
-            DispatchQueue.main.async { self.hasStoredKey = exists }
-        }
-        if coBalance == nil { loadBalance() }
+        activeClient.refreshStoredProviders()
     }
 
     private func selectModel(_ modelID: String) {
         guard modelID != selectedModel else { return }
         selectedModel = modelID
-        backendClient?.setModelOnBackend(modelID) { _ in }
-        // If switching away from OpenAI, clear key state display
-        if !Config.requiresAPIKey(modelID) {
-            statusMessage = ""
-        }
+        activeClient.setModelOnBackend(modelID) { _ in }
+        statusMessage = ""
     }
 
     private func saveKey() {
         let key = apiKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return }
         isSavingKey = true
-        backendClient?.saveAPIKey(key) { success in
+
+        activeClient.detectAndSaveAPIKey(key) { result in
             DispatchQueue.main.async {
-                self.isSavingKey    = false
-                self.isError        = !success
-                self.statusMessage  = success ? "Key saved" : "Failed to save key"
-                if success {
-                    self.hasStoredKey = true
-                    self.apiKeyInput  = ""
-                    // Fix: re-persist the selected OpenAI model after saving the key
-                    // so the backend doesn't silently revert to its default
-                    if Config.requiresAPIKey(self.selectedModel) {
-                        self.backendClient?.setModelOnBackend(self.selectedModel) { _ in }
+                self.isSavingKey = false
+                switch result {
+                case .success(let provider):
+                    self.isError       = false
+                    self.statusMessage = "\(provider.displayName) key saved — \(provider.models.count) models unlocked"
+                    self.apiKeyInput   = ""
+                    self.detectedProvider = nil
+                    // Auto-select first model of newly unlocked provider if current is locked
+                    if Config.requiresAPIKey(self.selectedModel),
+                       !self.client.storedProviders.contains(
+                            Config.provider(forModelID: self.selectedModel)?.id ?? "") {
+                        if let first = provider.models.first {
+                            self.selectModel(first.id)
+                        }
                     }
+                case .failure(let error):
+                    self.isError       = true
+                    self.statusMessage = error.localizedDescription
                 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3) { self.statusMessage = "" }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4) { self.statusMessage = "" }
             }
         }
     }
 
-    private func removeKey() {
-        backendClient?.removeAPIKey { success in
+    private func removeKey(provider: String) {
+        activeClient.removeAPIKey(provider: provider) { success in
             DispatchQueue.main.async {
-                if success { self.hasStoredKey = false }
                 self.isError       = !success
                 self.statusMessage = success ? "Key removed" : "Failed to remove key"
+                // If active model belonged to removed provider, fall back to free default
+                if success,
+                   let currentProvider = Config.provider(forModelID: self.selectedModel),
+                   currentProvider.id == provider {
+                    self.selectModel(Config.defaultModel)
+                }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.statusMessage = "" }
             }
         }
@@ -328,28 +375,33 @@ struct APIKeysView: View {
 private struct ModelPill: View {
     let option    : Config.ModelOption
     let isSelected: Bool
+    let isLocked  : Bool
     let accent    : Color
     let action    : () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                Image(systemName: isLocked ? "lock" : (isSelected ? "checkmark.circle.fill" : "circle"))
                     .font(.system(size: 12))
-                    .foregroundColor(isSelected ? accent : .secondary)
+                    .foregroundColor(isLocked ? .secondary.opacity(0.4) : (isSelected ? accent : .secondary))
                 Text(option.label)
                     .font(.system(size: 12))
-                    .foregroundColor(isSelected ? .primary : .secondary)
+                    .foregroundColor(isLocked ? .secondary.opacity(0.4) : (isSelected ? .primary : .secondary))
             }
             .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(isSelected ? accent.opacity(0.08) : Color(NSColor.controlBackgroundColor))
+            .background(isLocked
+                ? Color(NSColor.controlBackgroundColor).opacity(0.5)
+                : (isSelected ? accent.opacity(0.08) : Color(NSColor.controlBackgroundColor)))
             .cornerRadius(8)
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
-                    .stroke(isSelected ? accent : Color.secondary.opacity(0.2),
+                    .stroke(isLocked ? Color.secondary.opacity(0.1)
+                            : (isSelected ? accent : Color.secondary.opacity(0.2)),
                             lineWidth: isSelected ? 1 : 0.5)
             )
         }
         .buttonStyle(.plain)
+        .disabled(isLocked)
     }
 }
