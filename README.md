@@ -32,7 +32,7 @@ Whispr understands **context** — it formats output differently based on the ap
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/your-org/whispr.git
+git clone https://github.com/georgelele1/Comp9900-w18c-almond.git
 cd whispr
 ```
 
