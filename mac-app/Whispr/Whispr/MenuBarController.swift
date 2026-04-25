@@ -1,7 +1,6 @@
 import AppKit
 import SwiftUI
 import Combine
-import EventKit
 
 final class MenuBarController: NSObject, NSMenuDelegate {
     static let shared = MenuBarController()
@@ -14,7 +13,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var startItem        : NSMenuItem?
     private var stopItem         : NSMenuItem?
     private var languageMenuItems: [NSMenuItem] = []
-    private var calendarMenuItem : NSMenuItem?
 
     private var backendClient: LocalBackendClient { AppManager.shared.localBackendClient }
 
@@ -41,11 +39,15 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
+    // =========================================================
+    // MARK: - Menu setup
+    // =========================================================
+
     private func setupMenu() {
         let menu = NSMenu()
         menu.delegate = self
 
-        // ── Last result ───────────────────────────────────────
+        // ── 1. STATUS INFO ────────────────────────────────────────
         let resultItem = makeInfoItem(label: "Last result", value: "No transcription yet", icon: "text.bubble")
         resultItem.action = #selector(copyLastResult)
         resultItem.target = self
@@ -53,7 +55,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(resultItem)
         self.lastResultItem = resultItem
 
-        // ── Model · cost · balance ────────────────────────────
         let modelItem = makeInfoItem(label: "Model", value: "…", icon: "cpu")
         modelItem.action = #selector(openAPIKeys)
         modelItem.target = self
@@ -62,7 +63,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(makeSectionSeparator(label: "RECORDING"))
 
-        // ── Actions ───────────────────────────────────────────
+        // ── 2. START / STOP ───────────────────────────────────────
         let start = NSMenuItem(title: "Start Recording", action: #selector(startRecording), keyEquivalent: "")
         start.target = self
         start.image  = icon("record.circle.fill", color: .systemGreen, size: 14)
@@ -78,7 +79,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(makeSectionSeparator(label: "SETTINGS"))
 
-        // ── Language ──────────────────────────────────────────
+        // ── 3. FLAT SETTINGS ITEMS ────────────────────────────────
+
+        // Output Language submenu
         let langMenu = NSMenu()
         languageMenuItems.removeAll()
         for lang in Config.supportedLanguages {
@@ -93,28 +96,24 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         menu.addItem(langParent)
         refreshLanguageMenu()
 
-        // ── Dictionary ────────────────────────────────────────
         let dictItem = NSMenuItem(title: "Update Dictionary", action: #selector(updateDictionary), keyEquivalent: "d")
         dictItem.target = self
         dictItem.image  = icon("text.book.closed", color: .secondaryLabelColor, size: 13)
         menu.addItem(dictItem)
 
-        // ── Calendar ──────────────────────────────────────────
-        let calItem = NSMenuItem(title: "Calendar Access: Checking…", action: #selector(handleCalendarItem), keyEquivalent: "")
-        calItem.target = self
-        calItem.image  = icon("calendar", color: .secondaryLabelColor, size: 13)
-        menu.addItem(calItem)
-        calendarMenuItem = calItem
-
-        menu.addItem(makeSectionSeparator(label: "APP"))
-
-        let openItem = NSMenuItem(title: "Open Whispr", action: #selector(openMainWindow), keyEquivalent: "o")
-        openItem.target = self
-        openItem.image  = icon("macwindow", color: .secondaryLabelColor, size: 13)
-        menu.addItem(openItem)
-
         menu.addItem(.separator())
 
+        // ── 4. SETTINGS (highlighted, above quit) ─────────────────
+        let settingsItem = makeHighlightedItem(
+            title:  "Settings",
+            icon:   "gearshape.fill",
+            color:  NSColor(red: 0.498, green: 0.467, blue: 0.867, alpha: 1),
+            action: #selector(openSettings),
+            key:    ","
+        )
+        menu.addItem(settingsItem)
+
+        // ── 5. QUIT ───────────────────────────────────────────────
         let quitItem = NSMenuItem(title: "Quit Whispr", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         quitItem.attributedTitle = NSAttributedString(
@@ -126,7 +125,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
         statusItem.menu = menu
 
-        // ── Reactive bindings ─────────────────────────────────
+        // ── Reactive bindings ─────────────────────────────────────
 
         AppManager.shared.$appStatus
             .receive(on: DispatchQueue.main)
@@ -137,7 +136,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] text in
                 guard let self else { return }
-                let preview = text.isEmpty ? "No transcription yet" : String(text.prefix(55)) + (text.count > 55 ? "…" : "")
+                let preview = text.isEmpty
+                    ? "No transcription yet"
+                    : String(text.prefix(55)) + (text.count > 55 ? "…" : "")
                 self.lastResultItem?.attributedTitle = self.makeInfoAttributed(label: "Last result", value: preview)
                 self.lastResultItem?.isEnabled = !text.isEmpty
             }
@@ -162,13 +163,30 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.refreshLanguageMenu() }
             .store(in: &cancellables)
+    }
 
-        backendClient.$calendarPermission
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.refreshCalendarItem() }
-            .store(in: &cancellables)
+    // =========================================================
+    // MARK: - Helpers
+    // =========================================================
 
-        refreshCalendarItem()
+    /// A visually prominent item with a filled-color icon and bold title — used for primary actions.
+    private func makeHighlightedItem(
+        title  : String,
+        icon   : String,
+        color  : NSColor,
+        action : Selector?,
+        key    : String
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        item.target = self
+
+        // Bold title in the accent colour
+        item.attributedTitle = NSAttributedString(string: title, attributes: [
+            .font           : NSFont.systemFont(ofSize: 13, weight: .semibold),
+            .foregroundColor: color,
+        ])
+        item.image = self.icon(icon, color: color, size: 14)
+        return item
     }
 
     private func applyStatus(_ status: AppStatus) {
@@ -180,8 +198,6 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         AppManager.shared.detectCurrentApp()
-        backendClient.refreshCalendarPermission()
-        // Show current shortcut next to each action
         startItem?.title = "Start Recording    \(ShortcutManager.shared.startShortcut.displayString)"
         stopItem?.title  = "Stop & Transcribe  \(ShortcutManager.shared.stopShortcut.displayString)"
     }
@@ -198,34 +214,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         backendClient.syncLanguageToBackend { _ in }
     }
 
-    func refreshCalendarItem() {
-        let status = EKEventStore.authorizationStatus(for: .event)
-        switch status {
-        case .authorized, .fullAccess:
-            calendarMenuItem?.attributedTitle = makeInfoAttributed(label: "Calendar", value: "Granted ✓", valueColor: .systemGreen)
-            calendarMenuItem?.action = nil
-        case .denied, .restricted:
-            calendarMenuItem?.attributedTitle = makeInfoAttributed(label: "Calendar", value: "Open Settings…", valueColor: .systemOrange)
-            calendarMenuItem?.action = #selector(handleCalendarItem)
-        default:
-            calendarMenuItem?.attributedTitle = makeInfoAttributed(label: "Calendar", value: "Grant Access…", valueColor: .systemBlue)
-            calendarMenuItem?.action = #selector(handleCalendarItem)
-        }
-    }
-
-    @objc private func handleCalendarItem() {
-        let status = EKEventStore.authorizationStatus(for: .event)
-        switch status {
-        case .authorized, .fullAccess: break
-        case .denied, .restricted: backendClient.openCalendarSettings()
-        default: backendClient.requestCalendarPermission { [weak self] _ in self?.refreshCalendarItem() }
-        }
-    }
-
+    // ── Actions ──────────────────────────────────────────────
     @objc private func updateDictionary() { AppManager.shared.updateDictionary() }
     @objc private func startRecording()   { AppManager.shared.startRecording() }
     @objc private func stopRecording()    { AppManager.shared.stopRecordingAndProcess() }
-    @objc private func openMainWindow()   { MainWindowController.shared.navigate(to: .home) }
+    @objc private func openSettings()     { MainWindowController.shared.navigate(to: .home) }
     @objc private func openAPIKeys()      { MainWindowController.shared.navigate(to: .apiKeys) }
     @objc private func quitApp()          { NSApp.terminate(nil) }
 
@@ -235,6 +228,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }
+
+    // ── Item builders ─────────────────────────────────────────
 
     private func makeInfoItem(label: String, value: String, icon iconName: String) -> NSMenuItem {
         let item = NSMenuItem()
