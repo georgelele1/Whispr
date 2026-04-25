@@ -7,68 +7,28 @@ import json
 import re
 import sys
 import time
-import threading
 from pathlib import Path
 from typing import Any, Dict, List
 
+# ── sys.path fix MUST be before any local imports ────────────────────────────
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 if str(_BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(_BACKEND_ROOT))
+# ─────────────────────────────────────────────────────────────────────────────
 
 from connectonion.address import load
 from connectonion import Agent, host
 
-from storage import (
-    storage_path, load_store, save_store,
-    load_history, get_agent_model, load_env_into_os,
-)
+from storage import app_support_dir, storage_path, load_store, save_store, load_history, get_agent_model, load_env_into_os
 
+# Load .env files so OPENAI_API_KEY and OPENONION_API_KEY are available
+# (this process is launched directly, not via app.py, so we must load manually)
 load_env_into_os()
 
 BASE_DIR = Path(__file__).resolve().parent
 CO_DIR   = BASE_DIR / ".co"
-
 DICTIONARY_FILE            = "dictionary.json"
-DICTIONARY_UPDATE_INTERVAL = 60 * 60 * 24
-
 _DICT_TOP_N     = 50
-_UPDATE_EVERY   = 5
-_update_counter = 0
-_update_running = False
-_update_lock    = threading.Lock()
-
-COMMON_WORDS = {
-    "the","a","an","and","or","but","in","on","at","to","for","of","with",
-    "is","was","are","were","be","been","i","you","he","she","we","they",
-    "it","this","that","my","your","his","her","our","its","have","has",
-    "do","did","can","will","would","could","should","may","might","just",
-    "so","then","also","about","from","into","up","out","if","not","as",
-    "all","some","one","two","more","other","new","get","got","go","said",
-    "there","here","now","like","very","really","okay","hi","hey","yeah",
-    "when","what","how","which","who","where","because","after","before",
-    "meeting","email","message","need","want","make","let","know","think",
-    "time","day","week","today","tomorrow","back","right","good","great",
-    "ideal","stuff","thing","file","folder","report","document","app",
-    "install","download","run","build","version","command","update","system",
-}
-
-LANGUAGE_WORDS = {
-    "english","chinese","spanish","french","japanese","korean","arabic",
-    "german","portuguese","italian","russian","hindi","dutch","swedish",
-    "mandarin","cantonese",
-}
-
-OVEREXPOSED_BRANDS = {
-    "zoom","google","apple","microsoft","slack","teams","notion","figma",
-    "github","gmail","chrome","safari","youtube","twitter","facebook",
-    "instagram","linkedin","whatsapp","telegram","discord",
-}
-
-ALLOWED_TYPES = {
-    "person_name","project_name","brand","company","domain","package",
-    "technical","course_code","acronym","organisation","organization",
-    "place","custom","other",
-}
 
 
 # =========================================================
@@ -84,88 +44,21 @@ def save_dictionary(data: Dict[str, Any]) -> None:
 
 
 # =========================================================
-# Validation helpers
-# =========================================================
-
-def _looks_like_domain(text: str) -> bool:
-    p = text.lower().strip()
-    if "://" in p or "@" in p:
-        return False
-    if not re.fullmatch(r"[a-z0-9][a-z0-9\-]*(\.[a-z0-9][a-z0-9\-]*)+\.[a-z]{2,}", p):
-        return False
-    root = p.split(".")[0]
-    return root not in {"company","website","page","link","mail","info","support","contact"}
-
-
-def _looks_like_special_term(text: str) -> bool:
-    s = text.strip()
-    if not s:
-        return False
-    if re.search(r"[a-z][A-Z]", s): return True
-    if re.search(r"\d", s):         return True
-    if any(ch in s for ch in [".", "-", "_", "/"]): return True
-    if s.isupper() and len(s) >= 2: return True
-    return False
-
-
-def _is_valid_term(phrase: str, term_type: str = "other") -> bool:
-    phrase = str(phrase or "").strip()
-    p = phrase.lower()
-    if not phrase or len(p) < 3:         return False
-    if p in COMMON_WORDS:                return False
-    if p in LANGUAGE_WORDS:             return False
-    if p in OVEREXPOSED_BRANDS:         return False
-    if "@" in p or "://" in p:          return False
-    if _looks_like_domain(phrase):      return True
-    if term_type in {
-        "person_name","project_name","brand","company","domain","package",
-        "technical","course_code","acronym","organisation","organization",
-    }:
-        return True
-    if _looks_like_special_term(phrase): return True
-    if phrase.isalpha() and phrase == p and len(phrase) <= 8: return False
-    return True
-
-
-def _clean_aliases(aliases: List[str], phrase: str) -> List[str]:
-    phrase_lower = phrase.lower().strip()
-    cleaned = []
-    for alias in aliases:
-        a = str(alias).strip()
-        if not a or a.lower() == phrase_lower or len(a) > 80:
-            continue
-        if "://" in a or "@" in a:
-            continue
-        cleaned.append(a)
-    return sorted(set(cleaned))
-
-
-def _is_duplicate(phrase: str, existing: dict) -> str | None:
-    p = phrase.lower().strip()
-    if p in existing:
-        return p
-    p_norm = re.sub(r"[-_\s.]", "", p)
-    for key, term in existing.items():
-        if p in [a.lower() for a in term.get("aliases", [])]:
-            return key
-        if p_norm and p_norm == re.sub(r"[-_\s.]", "", key.lower()):
-            return key
-    return None
-
-
-# =========================================================
 # Pipeline event handlers
 # =========================================================
 
 def inject_dictionary(agent) -> None:
-    """after_user_input — inject approved terms with aliases. 0ms, no LLM."""
+    """after_user_input — inject top-N approved terms with aliases. 0ms, no LLM."""
     lines = []
     for t in load_dictionary().get("terms", []):
         if not t.get("approved", True) or not t.get("phrase", "").strip():
             continue
         phrase  = t["phrase"].strip()
         aliases = [str(a).strip() for a in t.get("aliases", []) if str(a).strip()]
-        lines.append(f"{phrase} (also: {', '.join(aliases)})" if aliases else phrase)
+        if aliases:
+            lines.append(f"{phrase} (also: {', '.join(aliases)})")
+        else:
+            lines.append(phrase)
         if len(lines) >= _DICT_TOP_N:
             break
     if lines:
@@ -179,49 +72,11 @@ def inject_dictionary(agent) -> None:
 
 
 def update_dictionary_background(agent) -> None:
-    """on_complete — trigger background update every _UPDATE_EVERY runs."""
-    global _update_counter, _update_running
-    _update_counter += 1
-    if _update_counter % _UPDATE_EVERY != 0:
-        return
-    with _update_lock:
-        if _update_running:
-            return
-        _update_running = True
-    threading.Thread(target=_background_update, daemon=True).start()
-
-
-def _background_update() -> None:
-    global _update_running
-    try:
-        history   = load_history().get("items", [])[-200:]
-        all_texts = [str(i.get("final_text", "")).strip() for i in history if str(i.get("final_text", "")).strip()]
-        prune_stale_terms(all_texts)
-        new_items = get_new_history_since_last_update()
-        limit     = get_optimal_sample_size(new_items)
-        if limit > 0:
-            run_batched_update(new_items[-limit:])
-            mark_dictionary_updated()
-    finally:
-        with _update_lock:
-            _update_running = False
-
-
+    """on_complete — no-op. Auto-update triggered from Swift."""
+    pass
 # =========================================================
-# Scheduling helpers
+# Update scheduling helpers
 # =========================================================
-
-def should_update_dictionary() -> bool:
-    path = storage_path("dictionary_last_update.json")
-    if not path.exists():
-        return True
-    try:
-        elapsed   = time.time() - json.loads(path.read_text(encoding="utf-8")).get("last_update", 0)
-        new_items = get_new_history_since_last_update()
-        return bool(new_items and elapsed > 3600) or elapsed > DICTIONARY_UPDATE_INTERVAL
-    except Exception:
-        return True
-
 
 def mark_dictionary_updated() -> None:
     storage_path("dictionary_last_update.json").write_text(
@@ -237,15 +92,18 @@ def get_new_history_since_last_update() -> List[Dict[str, Any]]:
             last_ts = json.loads(path.read_text(encoding="utf-8")).get("last_update", 0.0)
         except Exception:
             pass
-    return [i for i in load_history().get("items", []) if i.get("ts", 0) / 1000 > last_ts]
+    return [
+        item for item in load_history().get("items", [])
+        if item.get("ts", 0) / 1000 > last_ts
+    ]
 
 
 def get_optimal_sample_size(items: List[Any]) -> int:
-    n = len(items)
-    if n == 0:   return 0
-    if n < 20:   return n
-    if n < 100:  return max(20, n // 3)
-    return max(40, n // 5)
+    total = len(items)
+    if total == 0:  return 0
+    if total < 20:  return total
+    if total < 100: return max(20, total // 3)
+    return max(40, total // 5)
 
 
 def deduplicate_items(texts: List[str], threshold: int = 10) -> List[str]:
@@ -259,12 +117,17 @@ def deduplicate_items(texts: List[str], threshold: int = 10) -> List[str]:
 
 
 def prepare_items_for_agent(items: List[Dict[str, Any]]) -> List[str]:
+    """Return both raw→final diff pairs and plain final texts.
+    Diff pairs are the most valuable signal — they show exactly what the
+    speech model got wrong vs what was intended.
+    """
     texts = []
     for item in items:
         raw   = str(item.get("raw_text",   "")).strip()
         final = str(item.get("final_text", "")).strip()
         if not final:
             continue
+        # Include diff pair when raw differs meaningfully from final
         if raw and raw.lower() != final.lower() and len(raw) > 8:
             texts.append(f"[heard: {raw}] → [corrected: {final}]")
         else:
@@ -273,66 +136,17 @@ def prepare_items_for_agent(items: List[Dict[str, Any]]) -> List[str]:
 
 
 # =========================================================
-# Entity extraction (WHO / WHAT from sentence structure)
-# =========================================================
-
-def extract_key_entities(texts: List[str]) -> List[Dict[str, Any]]:
-    """LLM-based dependency-style extraction: pull subject/object proper nouns."""
-    if not texts:
-        return []
-    sample = texts[-20:]
-    agent = Agent(
-        model=get_agent_model(),
-        name="whispr_entity_extractor",
-        system_prompt=(
-            "You extract key entities from voice transcription sentences.\n\n"
-            "Focus on sentence structure:\n"
-            "- WHO: person being asked to do something\n"
-            "- WHAT: specific product, package, project, or named thing\n\n"
-            "Input may be multilingual or contain [heard: X] → [corrected: Y] pairs.\n"
-            "For diff pairs, focus on the corrected Y side.\n\n"
-            "INCLUDE: person names, package names, product names, project names,\n"
-            "  course codes, API names, brand names, technical terms, acronyms, domains.\n"
-            "EXCLUDE: verbs, generic nouns (report, meeting, email, file), common words,\n"
-            "  pronouns, prepositions, filler words, full sentences, URLs, language names.\n\n"
-            "For each entity:\n"
-            "  - phrase: correct form\n"
-            "  - type: person_name | package | brand | project_name | acronym |\n"
-            "          technical | course_code | organisation | other\n"
-            "  - aliases: realistic phonetic mishearings\n"
-            "  - confidence: 0.9 if from diff pair, 0.85 if specific technical term\n\n"
-            "Return ONLY a JSON array. No markdown.\n"
-            "[{\"phrase\":\"Rezene\",\"type\":\"person_name\","
-            "\"aliases\":[\"rezone\",\"rezean\"],\"confidence\":0.9}]\n"
-            "Return [] if nothing qualifies."
-        ),
-    )
-    try:
-        raw = str(agent.input(
-            "Extract key entities (WHO and WHAT) from these transcriptions:\n\n"
-            + "\n---\n".join(sample)
-            + "\n\nReturn JSON array only."
-        )).strip()
-        result = json.loads(raw)
-        if not isinstance(result, list):
-            return []
-        return [
-            e for e in result
-            if isinstance(e, dict)
-            and float(e.get("confidence", 0)) >= 0.85
-            and _is_valid_term(str(e.get("phrase", "")), str(e.get("type", "other")))
-        ]
-    except Exception:
-        return []
-
-
-# =========================================================
-# Dictionary CRUD (agent tools + user CLI)
+# Agent tool functions
 # =========================================================
 
 def get_recent_transcripts(limit: int = 20) -> Dict[str, Any]:
+    """Return the most recent transcript texts for analysis."""
     items = load_history().get("items", [])
-    texts = [str(i.get("final_text", "")).strip() for i in items[-limit:] if str(i.get("final_text", "")).strip()]
+    texts = [
+        str(item.get("final_text", "")).strip()
+        for item in items[-limit:]
+        if str(item.get("final_text", "")).strip()
+    ]
     return {"ok": True, "texts": texts, "count": len(texts)}
 
 
@@ -341,25 +155,23 @@ def get_dictionary() -> Dict[str, Any]:
 
 
 def add_or_update_term(
-    phrase     : str,
-    aliases    : List[str] | None = None,
-    entry_type : str   = "custom",
-    confidence : float = 1.0,
-    source     : str   = "user",
-    approved   : bool  = True,
+    phrase: str,
+    aliases: List[str] | None = None,
+    entry_type: str = "custom",
+    confidence: float = 1.0,
 ) -> Dict[str, Any]:
     phrase = str(phrase or "").strip()
     if not phrase:
         return {"ok": False, "error": "phrase is required"}
 
     clean_aliases = sorted({
-        str(a).strip() for a in (aliases or [])
+        str(a).strip()
+        for a in (aliases or [])
         if str(a).strip() and str(a).strip().lower() != phrase.lower()
     })
 
     data  = load_dictionary()
     terms = data.get("terms", [])
-    now   = time.time()
 
     for item in terms:
         if str(item.get("phrase", "")).lower() == phrase.lower():
@@ -368,10 +180,8 @@ def add_or_update_term(
             item["aliases"]    = sorted(merged)
             item["type"]       = entry_type or item.get("type", "custom")
             item["confidence"] = max(float(item.get("confidence", 0.0)), float(confidence))
-            if item.get("source") != "user":
-                item["source"] = source
-            item["approved"]   = bool(approved or item.get("source") == "user")
-            item["updated_at"] = now
+            item["source"]     = "agent"
+            item["approved"]   = True
             save_dictionary(data)
             return {"ok": True, "updated": True, "entry": item}
 
@@ -379,11 +189,9 @@ def add_or_update_term(
         "phrase":     phrase,
         "aliases":    clean_aliases,
         "type":       entry_type or "custom",
-        "source":     source,
+        "source":     "agent",
         "confidence": float(confidence),
-        "approved":   bool(approved),
-        "added_at":   now,
-        "updated_at": now,
+        "approved":   True,
     }
     terms.append(entry)
     data["terms"] = terms
@@ -395,10 +203,14 @@ def remove_term(phrase: str) -> Dict[str, Any]:
     phrase = str(phrase or "").strip()
     if not phrase:
         return {"ok": False, "error": "phrase is required"}
+
     data     = load_dictionary()
-    filtered = [t for t in data.get("terms", []) if str(t.get("phrase", "")).lower() != phrase.lower()]
-    if len(filtered) == len(data.get("terms", [])):
+    terms    = data.get("terms", [])
+    filtered = [t for t in terms if str(t.get("phrase", "")).lower() != phrase.lower()]
+
+    if len(filtered) == len(terms):
         return {"ok": False, "error": f"term not found: {phrase}"}
+
     data["terms"] = filtered
     save_dictionary(data)
     return {"ok": True, "removed": phrase, "total_terms": len(filtered)}
@@ -408,93 +220,105 @@ def approve_term(phrase: str, approved: bool = True) -> Dict[str, Any]:
     phrase = str(phrase or "").strip()
     if not phrase:
         return {"ok": False, "error": "phrase is required"}
+
     data = load_dictionary()
     for item in data.get("terms", []):
         if str(item.get("phrase", "")).lower() == phrase.lower():
-            item["approved"]   = bool(approved)
-            item["updated_at"] = time.time()
+            item["approved"] = bool(approved)
             save_dictionary(data)
             return {"ok": True, "phrase": phrase, "approved": item["approved"]}
+
     return {"ok": False, "error": f"term not found: {phrase}"}
-
-
-# =========================================================
-# Deduplication + pruning
-# =========================================================
-
-def deduplicate_dictionary() -> Dict[str, Any]:
-    dictionary = load_dictionary()
-    terms      = dictionary.get("terms", [])
-    merged_map: Dict[str, Any] = {}
-    removed = 0
-
-    for term in terms:
-        phrase = str(term.get("phrase", "")).strip()
-        if not phrase:
-            continue
-        key = phrase.lower()
-        dup = _is_duplicate(phrase, {k: v for k, v in merged_map.items() if k != key})
-        if dup:
-            e = merged_map[dup]
-            new_aliases = set(term.get("aliases", []))
-            if phrase.lower() != dup:
-                new_aliases.add(phrase)
-            e["aliases"]    = sorted(set(e.get("aliases", [])) | new_aliases)
-            e["confidence"] = max(float(e.get("confidence", 0) or 0), float(term.get("confidence", 0) or 0))
-            if term.get("source") == "user" or e.get("source") == "user":
-                e["source"]   = "user"
-                e["approved"] = True
-            removed += 1
-        else:
-            merged_map[key] = term
-
-    dictionary["terms"] = list(merged_map.values())
-    save_dictionary(dictionary)
-    return {"merged": removed, "total_terms": len(dictionary["terms"])}
-
-
-def prune_stale_terms(all_history_texts: List[str]) -> Dict[str, Any]:
-    dictionary = load_dictionary()
-    terms      = dictionary.get("terms", [])
-    if not terms or not all_history_texts:
-        return {"removed": [], "kept": len(terms)}
-
-    all_text = " ".join(all_history_texts).lower()
-    cutoff   = time.time() - (7 * 24 * 3600)
-    kept, removed = [], []
-
-    for term in terms:
-        if term.get("source", "agent") != "agent":
-            kept.append(term)
-            continue
-        added_at   = float(term.get("added_at", 0) or 0)
-        confidence = float(term.get("confidence", 0) or 0)
-        if (added_at and added_at > cutoff) or confidence >= 0.9:
-            kept.append(term)
-            continue
-        phrase  = str(term.get("phrase", "")).strip().lower()
-        aliases = [str(a).strip().lower() for a in term.get("aliases", []) if str(a).strip()]
-        if phrase in all_text or any(a in all_text for a in aliases):
-            kept.append(term)
-        else:
-            removed.append(term.get("phrase", ""))
-
-    dictionary["terms"] = kept
-    save_dictionary(dictionary)
-    return {"removed": removed, "kept": len(kept)}
 
 
 # =========================================================
 # Batched update
 # =========================================================
 
+def _is_duplicate(phrase: str, existing: dict) -> str | None:
+    p = phrase.lower().strip()
+    if p in existing:
+        return p
+    for key, term in existing.items():
+        aliases_lower = [a.lower() for a in term.get("aliases", [])]
+        if p in aliases_lower:
+            return key
+        p_norm   = re.sub(r"[-\s]", "", p)
+        key_norm = re.sub(r"[-\s]", "", key)
+        if p_norm == key_norm and p_norm:
+            return key
+    return None
+
+
+def deduplicate_dictionary() -> Dict[str, Any]:
+    dictionary = load_dictionary()
+    terms      = dictionary.get("terms", [])
+    merged     = {}
+    removed    = 0
+
+    for term in terms:
+        phrase = str(term.get("phrase", "")).strip()
+        if not phrase:
+            continue
+        key = phrase.lower()
+        dup = _is_duplicate(phrase, {k: v for k, v in merged.items() if k != key})
+        if dup:
+            existing_aliases = set(merged[dup].get("aliases", []))
+            new_aliases      = set(term.get("aliases", []))
+            if phrase.lower() != dup:
+                new_aliases.add(phrase)
+            merged[dup]["aliases"] = sorted(existing_aliases | new_aliases)
+            if term.get("confidence", 0) > merged[dup].get("confidence", 0):
+                merged[dup]["confidence"] = term["confidence"]
+            removed += 1
+        else:
+            merged[key] = term
+
+    dictionary["terms"] = list(merged.values())
+    save_dictionary(dictionary)
+    return {"merged": removed, "total_terms": len(dictionary["terms"])}
+
+
 def _count_term_frequency(texts: List[str]) -> dict:
     freq: dict = {}
     for text in texts:
         tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9\-']*[A-Za-z0-9]|[A-Za-z0-9]", text)
-        for tok in set(t.lower() for t in tokens):
+        seen_in_this = set(t.lower() for t in tokens)
+        for tok in seen_in_this:
             freq[tok] = freq.get(tok, 0) + 1
-    return {k: v for k, v in freq.items() if v >= 1}
+    return {k: v for k, v in freq.items() if v >= 2}
+
+
+def prune_stale_terms(all_history_texts: List[str]) -> Dict[str, Any]:
+    """Remove agent-suggested terms that haven't appeared in recent history.
+    Never removes user-added terms or terms added in the last 7 days.
+    """
+    dictionary = load_dictionary()
+    terms      = dictionary.get("terms", [])
+    if not terms or not all_history_texts:
+        return {"removed": [], "kept": len(terms)}
+    all_text   = " ".join(all_history_texts).lower()
+    cutoff     = time.time() - (7 * 24 * 3600)  # 7 days grace period
+    kept, removed = [], []
+    for term in terms:
+        # Always keep user-added terms
+        if term.get("source", "agent") != "agent":
+            kept.append(term)
+            continue
+        # Keep recently added agent terms regardless of frequency
+        added_at = term.get("added_at", 0)
+        if added_at and added_at > cutoff:
+            kept.append(term)
+            continue
+        phrase  = str(term.get("phrase", "")).strip().lower()
+        aliases = [str(a).strip().lower() for a in term.get("aliases", []) if str(a).strip()]
+        if (phrase in all_text) or any(a in all_text for a in aliases):
+            kept.append(term)
+        else:
+            removed.append(term.get("phrase", ""))
+    dictionary["terms"] = kept
+    save_dictionary(dictionary)
+    return {"removed": removed, "kept": len(kept)}
 
 
 def run_batched_update(items: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -502,131 +326,96 @@ def run_batched_update(items: List[Dict[str, Any]]) -> Dict[str, Any]:
     if not texts:
         return {"added": [], "updated": [], "total_terms": len(load_dictionary().get("terms", []))}
 
-    entity_results = extract_key_entities(texts)
-    entity_hint = (
-        "\nHigh-confidence entities from sentence structure (WHO and WHAT — prioritise): "
-        + ", ".join(e.get("phrase", "") for e in entity_results if e.get("phrase"))
-        if entity_results else ""
-    )
-
-    freq      = _count_term_frequency(texts)
+    freq    = _count_term_frequency(texts)  # min freq=1 — single occurrence is enough for specific terms
+    _COMMON = {
+        "the","a","an","and","or","but","in","on","at","to","for","of","with",
+        "is","was","are","were","be","been","i","you","he","she","we","they",
+        "it","this","that","my","your","his","her","our","its","have","has",
+        "do","did","can","will","would","could","should","may","might","just",
+        "so","then","also","about","from","into","up","out","if","not","as",
+        "all","some","one","two","more","other","new","get","got","go","said",
+        "there","here","now","like","very","really","okay","hi","hey","yeah",
+        "when","what","how","which","who","where","because","after","before",
+        "meeting","email","message","need","want","make","let","know","think",
+        "time","day","week","today","tomorrow","back","right","good","great",
+    }
     recurring = sorted(
-        [(k, v) for k, v in freq.items() if k not in COMMON_WORDS and k not in LANGUAGE_WORDS and len(k) >= 3],
-        key=lambda x: -x[1],
+        [(k, v) for k, v in freq.items() if k not in _COMMON and len(k) >= 3],
+        key=lambda x: -x[1]
     )[:40]
     freq_hint = (
-        "\nRecurring tokens: " + ", ".join(f"{k}({v})" for k, v in recurring)
+        "\nRecurring tokens (term: count across transcriptions): "
+        + ", ".join(f"{k}({v})" for k, v in recurring)
         if recurring else ""
     )
 
     existing_terms = load_dictionary().get("terms", [])
-    existing_hint  = ", ".join(f'"{t["phrase"]}"' for t in existing_terms[:40] if t.get("phrase"))
-    existing_note  = f"\nAlready in dictionary (skip): {existing_hint}." if existing_hint else ""
+    existing_hint  = ", ".join('"' + t["phrase"] + '"' for t in existing_terms[:40])
+    existing_note  = (
+        f"\nAlready in dictionary (skip these): {existing_hint}."
+        if existing_hint else ""
+    )
 
     agent = Agent(
         model=get_agent_model(),
         name="whispr_dictionary_batch_updater",
         system_prompt=(
             "You are a dictionary term extractor for Whispr, a voice transcription app.\n"
-            "Primary input: [heard: X] → [corrected: Y] diff pairs.\n"
-            "Extract Y as the term, X as its alias.\n\n"
-            "ADD only when ALL true:\n"
-            "1. SPECIFIC — proper noun, package, course code, brand, acronym, technical term, person/org name.\n"
-            "2. NOT COMMON — not a standard English word. Never add language names, nationalities,\n"
-            "   common verbs (install, update, run), generic nouns, or overexposed brands (Zoom, Google).\n"
-            "3. MIS-TRANSCRIPTION RISK — unusual spelling, camelCase, sounds like another word.\n"
-            "4. NOT A URL — never add domains, emails, or snippet expansion values.\n\n"
-            "Aliases: only realistic phonetic mishearings actually seen in diff pairs.\n"
-            "Confidence: 0.95+ for clear diff pair, 0.85–0.94 for strong technical term, else omit.\n"
-            f"Allowed types: {' | '.join(sorted(ALLOWED_TYPES))}\n"
-            f"{entity_hint}"
+            "Find words/phrases a speech model is likely to mis-transcribe.\n\n"
+            "ADD a term only when ALL four criteria are met:\n"
+            "1. SPECIFIC — proper noun, course code, project name, brand, acronym, "
+            "technical/medical/legal term, person name, or organisation name.\n"
+            "2. RECURRING — appears in 2+ transcriptions (use frequency hints below).\n"
+            "3. NOT COMMON — not a standard English dictionary word.\n"
+            "4. MIS-TRANSCRIPTION RISK — unusual spelling, sounds like another word, "
+            "abbreviation, number+letter mix, or non-English origin.\n\n"
+            "For each term, list every realistic mishearing as ALIASES.\n"
+            "For TYPE pick one: course_code | person_name | project_name | "
+            "brand | acronym | technical | organisation | place | other\n\n"
+            "DO NOT add sentences, generic nouns, common verbs, or filler words.\n"
             f"{freq_hint}"
             f"{existing_note}\n\n"
-            "Return ONLY a JSON array. No markdown.\n"
-            "[{\"phrase\":\"connectonion\",\"type\":\"package\","
-            "\"aliases\":[\"connector onion\",\"connect onion\"],\"confidence\":0.95}]\n"
+            "Return ONLY a JSON array — no markdown, no explanation:\n"
+            "[{\"phrase\":\"<term>\",\"type\":\"<type>\",\"aliases\":[\"<mishearing>\"]}]\n"
             "Return [] if nothing qualifies."
         ),
     )
 
     try:
-        raw = str(agent.input(
-            f"{len(texts)} transcriptions:\n\n" + "\n---\n".join(texts) + "\n\nReturn JSON array only."
-        )).strip()
-        new_terms = json.loads(raw)
+        new_terms = json.loads(str(agent.input(
+            f"{len(texts)} transcriptions:\n\n" + "\n---\n".join(texts) +
+            "\n\nReturn JSON array only."
+        )).strip())
         if not isinstance(new_terms, list):
             new_terms = []
     except Exception:
         new_terms = []
 
     dictionary = load_dictionary()
-    existing   = {str(t.get("phrase", "")).lower(): t for t in dictionary.get("terms", []) if t.get("phrase")}
+    existing   = {str(t.get("phrase", "")).lower(): t for t in dictionary.get("terms", [])}
     added, updated = [], []
 
     for term in new_terms:
-        if not isinstance(term, dict):
+        phrase = str(term.get("phrase", "")).strip()
+        if not phrase:
             continue
-        phrase     = str(term.get("phrase", "")).strip()
-        term_type  = str(term.get("type", "other")).strip() or "other"
-        if term_type not in ALLOWED_TYPES:
-            term_type = "other"
-        try:
-            confidence = float(term.get("confidence", 0.85))
-        except Exception:
-            confidence = 0.85
-        if confidence < 0.85 or not _is_valid_term(phrase, term_type):
-            continue
-        aliases = _clean_aliases([str(a) for a in term.get("aliases", [])], phrase)
+        aliases = [str(a).strip() for a in term.get("aliases", []) if str(a).strip()]
         dup_key = _is_duplicate(phrase, existing)
         if dup_key:
             e = existing[dup_key]
-            e["aliases"]    = sorted(set(e.get("aliases", [])) | set(aliases))
-            e["confidence"] = max(float(e.get("confidence", 0) or 0), confidence)
-            e["updated_at"] = time.time()
-            if e.get("source") != "user":
-                e["approved"] = e["confidence"] >= 0.9
+            e["aliases"]  = sorted(set(e.get("aliases", [])) | set(aliases))
+            e["approved"] = True
             updated.append(e)
         else:
+            term_type = str(term.get("type", "other")).strip() or "other"
             entry = {
                 "phrase":     phrase,
-                "aliases":    aliases,
+                "aliases":    sorted(aliases),
                 "type":       term_type,
                 "source":     "agent",
-                "confidence": confidence,
-                "approved":   confidence >= 0.9,
+                "confidence": 1.0,
+                "approved":   True,
                 "added_at":   time.time(),
-                "updated_at": time.time(),
-            }
-            existing[phrase.lower()] = entry
-            added.append(entry)
-
-    # Merge high-confidence entities directly
-    for entity in entity_results:
-        phrase     = str(entity.get("phrase", "")).strip()
-        if not phrase:
-            continue
-        aliases    = _clean_aliases([str(a) for a in entity.get("aliases", [])], phrase)
-        term_type  = str(entity.get("type", "other")).strip() or "other"
-        confidence = float(entity.get("confidence", 0.9))
-        dup_key    = _is_duplicate(phrase, existing)
-        if dup_key:
-            e = existing[dup_key]
-            e["aliases"]    = sorted(set(e.get("aliases", [])) | set(aliases))
-            e["confidence"] = max(float(e.get("confidence", 0) or 0), confidence)
-            e["updated_at"] = time.time()
-            if e.get("source") != "user":
-                e["approved"] = e["confidence"] >= 0.85
-            updated.append(e)
-        else:
-            entry = {
-                "phrase":     phrase,
-                "aliases":    aliases,
-                "type":       term_type,
-                "source":     "agent",
-                "confidence": confidence,
-                "approved":   confidence >= 0.85,
-                "added_at":   time.time(),
-                "updated_at": time.time(),
             }
             existing[phrase.lower()] = entry
             added.append(entry)
@@ -646,12 +435,11 @@ def create_agent() -> Agent:
         model=get_agent_model(),
         name="whispr_dictionary_agent",
         system_prompt=(
-            "You are Whispr's personal dictionary manager. "
-            "Use get_recent_transcripts and get_dictionary when needed. "
-            "Only save terms that improve speech transcription accuracy: names, "
-            "project names, technical terms, package names, APIs, domains, acronyms. "
-            "Do not save common words, full sentences, or snippet expansion values. "
-            "Use add_or_update_term to save valid terms with realistic aliases."
+            "You are Whispr's personal dictionary agent. "
+            "When asked to update, use get_recent_transcripts to fetch history, "
+            "then find recurring proper nouns, technical terms, and domain-specific phrases. "
+            "Prioritise terms that are NOT common everyday words and are likely mis-transcribed. "
+            "Use add_or_update_term to save each. Include mishearing aliases where evident."
         ),
     )
     for fn in (get_recent_transcripts, get_dictionary, add_or_update_term, remove_term, approve_term):
@@ -677,23 +465,17 @@ if __name__ == "__main__":
     command = sys.argv[2] if len(sys.argv) > 2 else "update"
 
     if command == "update":
-        force      = "--force" in sys.argv
-        all_texts  = [str(i.get("final_text", "")).strip() for i in load_history().get("items", [])[-200:] if str(i.get("final_text", "")).strip()]
+        all_texts  = [
+            str(i.get("final_text", "")).strip()
+            for i in load_history().get("items", [])[-200:]
+            if str(i.get("final_text", "")).strip()
+        ]
         prune_result = prune_stale_terms(all_texts)
-
-        if not force and not should_update_dictionary():
-            _exit_json({
-                "ok": True, "skipped": True, "reason": "updated recently",
-                "added": [], "updated": [],
-                "pruned":      prune_result.get("removed", []),
-                "total_terms": len(load_dictionary().get("terms", [])),
-            })
-
         new_items = get_new_history_since_last_update()
         limit     = get_optimal_sample_size(new_items)
         if limit == 0:
             _exit_json({
-                "ok": True, "skipped": True, "reason": "no new history",
+                "ok": True, "skipped": True, "reason": "no new history since last update",
                 "added": [], "updated": [],
                 "total_terms": len(load_dictionary().get("terms", [])),
             })
@@ -722,7 +504,7 @@ if __name__ == "__main__":
         phrase     = sys.argv[3] if len(sys.argv) > 3 else ""
         aliases    = sys.argv[4].split(",") if len(sys.argv) > 4 else []
         entry_type = sys.argv[5] if len(sys.argv) > 5 else "custom"
-        _exit_json({"output": add_or_update_term(phrase, aliases, entry_type, source="user")})
+        _exit_json({"output": add_or_update_term(phrase, aliases, entry_type)})
 
     elif command == "remove":
         phrase = sys.argv[3] if len(sys.argv) > 3 else ""
