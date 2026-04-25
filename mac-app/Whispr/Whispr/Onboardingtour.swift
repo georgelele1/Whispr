@@ -30,7 +30,7 @@ private let tourSteps: [TourStep] = [
         icon:      "waveform.circle.fill",
         iconColor: .green,
         title:     "Smart transcription",
-        body:      "Whispr detects context — dictation gets cleaned up, questions get answered, and calendar queries fetch your schedule directly from Mac Calendar.",
+        body:      "Whispr detects context — dictation gets cleaned up and formatted for whatever app you're in, in any language.",
         hint:      nil
     ),
     TourStep(
