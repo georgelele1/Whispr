@@ -178,7 +178,19 @@ final class LocalBackendClient: ObservableObject {
     func saveAPIKey(_ key: String, provider: String = "openai", completion: @escaping (Bool) -> Void) {
         guard let backendScriptPath else { completion(false); return }
         runPythonCommand(script: backendScriptPath, arguments: ["cli", "set-api-key", key, provider]) { result in
-            completion((try? result.get()) != nil)
+            switch result {
+            case .failure(let error):
+                NSLog("[saveAPIKey] Python error: %@", error.localizedDescription)
+                completion(false)
+            case .success(let output):
+                NSLog("[saveAPIKey] output: %@", output)
+                if let data = output.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    completion(json["ok"] as? Bool ?? false)
+                } else {
+                    completion(!output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
         }
     }
 
@@ -471,7 +483,7 @@ final class LocalBackendClient: ObservableObject {
         guard let script = dictionaryAgentPath else {
             completion(.failure(makeError("dictionary_agent.py not found"))); return
         }
-        runPythonCommand(script: script, arguments: ["cli", "update"]) { result in
+        runPythonCommand(script: script, arguments: ["cli", "update", "--force"]) { result in
             switch result {
             case .failure(let e): completion(.failure(e))
             case .success(let output):
@@ -487,7 +499,9 @@ final class LocalBackendClient: ObservableObject {
                 }
                 let added   = (json["added"]   as? [[String: Any]] ?? []).compactMap { DictionaryTerm(dict: $0) }
                 let updated = (json["updated"] as? [[String: Any]] ?? []).compactMap { DictionaryTerm(dict: $0) }
-                completion(.success(DictionaryUpdateResult(added: added, updated: updated, totalTerms: json["total_terms"] as? Int ?? 0)))
+                let total   = json["total_terms"] as? Int ?? 0
+                // skipped=true means no new history — still a success, just nothing to add
+                completion(.success(DictionaryUpdateResult(added: added, updated: updated, totalTerms: total)))
             }
         }
     }
