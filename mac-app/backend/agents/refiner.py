@@ -1,11 +1,9 @@
 """
-agents/refiner.py — Voice transcription cleaning and formatting subagent.
+agents/refiner.py — Production version
 
-Agent-first version:
-- Always sends non-empty text to the refiner agent
-- Gives the agent active app name so it can decide format
-- Keeps dictionary/profile/language/snippet/session context
-- Keeps debug eval/logs disabled unless enabled by env flags
+- Agent-first pipeline
+- App-aware formatting via event injection + prompt
+- Session + profile + dictionary + snippets
 """
 
 from __future__ import annotations
@@ -16,18 +14,14 @@ import sys
 
 _real_stdout = sys.stdout
 sys.stdout = _io.StringIO()
-from connectonion import Agent, after_user_input, before_llm, on_complete
+from connectonion import Agent, after_user_input, before_llm
 sys.stdout = _real_stdout
 
-from storage import (
-    apply_dictionary_corrections,
-    get_agent_model,
-    DEBUG_EVAL,
-    DEBUG_LOGS,
-)
+from storage import apply_dictionary_corrections, get_agent_model
 
-from agents.profile import inject_profile, update_profile_background
+from agents.profile import inject_profile
 from agents.dictionary_agent import inject_dictionary
+from agents.plugins.appname import inject_app
 from agents.plugins.lang import inject_language
 from agents.plugins.session import inject_session
 from agents.plugins.snippets import inject_snippets
@@ -38,10 +32,6 @@ def _set_intent(agent) -> None:
 
 
 def _quick_clean(text: str) -> str:
-    """
-    Lightweight local cleanup before the agent.
-    This does not replace the agent; it only removes obvious noise.
-    """
     text = apply_dictionary_corrections(text)
 
     fillers = re.compile(
@@ -57,31 +47,24 @@ def _quick_clean(text: str) -> str:
     return text.strip()
 
 
-def _build_events(raw_text: str):
+def _build_events(raw_text: str, app_name: str):
     def _inject_snippets_with_raw(agent) -> None:
         agent.current_session["snippet_raw_input"] = raw_text
         inject_snippets(agent)
 
-    events = [
+    def _inject_app_with_name(agent) -> None:
+        agent.current_session["whispr_app_name"] = app_name
+        inject_app(agent)
+
+    return [
         after_user_input(_set_intent),
         after_user_input(inject_session),
         after_user_input(_inject_snippets_with_raw),
         after_user_input(inject_profile),
         after_user_input(inject_dictionary),
+        before_llm(_inject_app_with_name),
         before_llm(inject_language),
-        on_complete(update_profile_background),
     ]
-
-    if DEBUG_EVAL:
-        from agents.plugins.eval import generate_expected, evaluate_and_retry
-        events.insert(5, after_user_input(generate_expected))
-        events.append(on_complete(evaluate_and_retry))
-
-    if DEBUG_LOGS:
-        from agents.plugins.visibility import show_summary
-        events.append(on_complete(show_summary))
-
-    return events
 
 
 def _restore_placeholders(agent, result: str) -> str:
@@ -95,9 +78,6 @@ def _restore_placeholders(agent, result: str) -> str:
 
 
 def run(text: str, app_name: str = "unknown") -> str:
-    """
-    Clean and format raw transcribed speech.
-    """
     raw_text = str(text or "").strip()
     app_name = str(app_name or "unknown").strip() or "unknown"
 
@@ -140,9 +120,13 @@ def run(text: str, app_name: str = "unknown") -> str:
             "  Preserve flags, paths, filenames, identifiers, and quoted strings exactly.\n"
             "  Do NOT add markdown formatting.\n\n"
 
-            "- If the context suggests email or formal communication:\n"
-            "  Only generate a full email when the user clearly dictates one.\n"
-            "  Otherwise, keep it as a normal sentence or paragraph.\n\n"
+            "- If the active app context suggests email, mail, Gmail, Outlook, or formal communication:\n"
+            "  Format the output as an email when the user appears to be writing or replying to someone.\n"
+            "  Use a natural email structure when appropriate:\n"
+            "  greeting, body, closing.\n"
+            "  If the user provides a recipient name, use it in the greeting.\n"
+            "  If no recipient is provided, use a neutral greeting such as 'Hi,' only when a full email is appropriate.\n"
+            "  If the input is very short and only sounds like a sentence, keep it as a polished email sentence.\n"
 
             "- If the context suggests chat or messaging:\n"
             "  Keep the tone concise and conversational.\n\n"
@@ -176,13 +160,13 @@ def run(text: str, app_name: str = "unknown") -> str:
             "- No commentary.\n"
             "- No extra text."
         ),
-        on_events=_build_events(raw_text),
+        on_events=_build_events(raw_text, app_name),
     )
 
     prompt = (
         f"Active app: {app_name}\n"
         f"Raw transcription:\n{cleaned}\n\n"
-        "Decide the best final output format based on the active app and user intent."
+        "Generate final output."
     )
 
     result = str(agent.input(prompt)).strip()
