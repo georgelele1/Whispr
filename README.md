@@ -52,7 +52,7 @@ Build and run with **⌘R** in Xcode, or archive for distribution.
 
 ### 4. Grant permissions on first launch
 
-macOS will prompt for two permissions — both are required:
+macOS will prompt for two permissions — both are required:(remember to assgin the teams in sign page without teams everytime the project run will be identify as a new batch so your permission can not be saved and granted)
 
 | Permission | Why |
 |---|---|
