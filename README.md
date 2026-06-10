@@ -1,361 +1,392 @@
 # Whispr
 
-A macOS menu bar app that transcribes your voice, cleans it up with AI, and pastes the result directly into whatever app you're using — instantly.
+Whispr is a macOS menu bar application that records speech, transcribes it, routes the resulting text through specialized AI agents, and pastes the final output into the active application.
 
----
+It combines a native SwiftUI client with a local Python backend and supports context-aware text refinement, translation, macOS Calendar queries, local document retrieval, session memory, personal terminology, and voice snippets.
 
-## What it does
+## Key Features
 
-Press a hotkey → speak → press stop → Whispr transcribes, cleans, and pastes your words into the active app. No typing required.
+- Voice recording and transcription from a global keyboard shortcut
+- App-aware text refinement for mail, chat, documents, terminals, and code editors
+- Structured Agent Loop with rule-based routing and LLM fallback
+- Read-only macOS Calendar queries through EventKit
+- Local RAG over Markdown, text, JSON, CSV, and text-based PDF files
+- Personal dictionary with automatic terminology extraction
+- Voice snippet expansion with local matching and semantic fallback
+- Short-term session memory for follow-up instructions
+- Background profile learning from transcription history
+- Configurable output language and model provider
+- Local history, settings, dictionary, snippets, and knowledge files
 
-Whispr understands **context** — it formats output differently based on the app you're in:
+## How It Works
 
-- **Mail** → complete email with subject, greeting, body, sign-off
-- **Slack / Teams** → short conversational message
-- **Terminal / VS Code** → infers correct shell command or code syntax automatically
-- **Notes / Docs** → clean paragraphs or numbered lists
-- **Any other app** → cleaned, punctuated prose
+```text
+Audio recording
+    -> Speech transcription
+    -> Local cleanup and dictionary correction
+    -> Intent Router
+    -> Refiner / Calendar / Knowledge Agent
+    -> Output evaluation
+    -> Session and history update
+    -> Paste into the active application
+```
 
----
+### Agent Loop
+
+The backend converts each request into a structured route containing:
+
+```text
+intent
+need_tool
+tool_name
+query
+start_iso
+end_iso
+confidence
+reason
+```
+
+Clear calendar and knowledge requests are detected locally. Ambiguous requests are classified by an LLM, with invalid or low-confidence results falling back to the Refiner Agent.
+
+Current routes:
+
+| Intent | Module | Purpose |
+|---|---|---|
+| `refine` | Refiner Agent | Cleanup, translation, email, chat, notes, commands, and code |
+| `calendar` | Calendar Agent | Read events from the macOS Calendar |
+| `knowledge` | Knowledge Agent | Retrieve local documents and produce grounded answers |
+
+### Context-Aware Refinement
+
+The Refiner Agent receives:
+
+- Active macOS application
+- Selected output language
+- Recent session context
+- User profile
+- Personal dictionary
+- Voice snippet placeholders
+
+This allows the same spoken input to be formatted differently for Mail, Slack, Notes, Terminal, VS Code, and other applications.
+
+### Local RAG
+
+The Knowledge Agent searches two locations:
+
+```text
+~/Library/Application Support/Whispr/knowledge
+mac-app/backend/knowledge
+```
+
+Supported formats:
+
+```text
+.txt  .md  .markdown  .json  .csv  .pdf
+```
+
+Documents are split into overlapping chunks, ranked using lightweight lexical retrieval, and limited to the top three matches and a bounded prompt context. Parsed chunks are cached until their source file changes.
+
+PDF support requires a text layer. Scanned image-only PDFs require OCR before they can be searched.
+
+Example:
+
+```bash
+cd mac-app/backend
+python app.py cli knowledge-search "How does LoRA reduce trainable parameters?"
+```
+
+### Calendar Agent
+
+The Calendar Agent uses EventKit to query the user's macOS Calendar. It is read-only and returns event titles, times, calendars, locations, and notes.
+
+Calendar access must be granted under:
+
+```text
+System Settings -> Privacy & Security -> Calendars
+```
+
+### Memory and Personalization
+
+- Session memory stores the last three exchanges and expires after 60 minutes.
+- The personal dictionary applies local alias corrections before generation.
+- Dictionary learning runs after every five successful transcriptions.
+- Profile learning runs in a background process after approximately 50 new history records.
+- Learned profile context includes recurring topics, writing preferences, and frequently used applications.
+
+### Evaluation Pipeline
+
+The default evaluation path uses local checks and does not make another model request. It checks for empty output, excessive output length, and residual filler words.
+
+Set the following environment variable to enable one additional LLM judge call:
+
+```bash
+WHISPR_DEBUG_EVAL=1
+```
 
 ## Requirements
 
-- macOS 13 or later
-- Python 3.10+ (bundled with the app)
-- Microphone access
-- Accessibility access (for global hotkeys and auto-paste)
+### macOS Application
 
----
+- macOS 13 or later
+- Xcode
+- Python 3.11 recommended
+- Microphone permission
+- Accessibility permission
+- Calendar permission for Calendar Agent requests
+
+### Model Access
+
+The current default model is `gpt-5.5`, which requires an OpenAI API key. Model availability depends on the models enabled for your OpenAI account.
+
+Supported configuration:
+
+| Provider | Models | Credential |
+|---|---|---|
+| OpenAI | GPT-5.5, GPT-5, GPT-4o | `OPENAI_API_KEY` |
+| Google through ConnectOnion | Gemini 3 Flash, Gemini 3 Pro, Gemini 2.5 Flash | `OPENONION_API_KEY` |
+| Anthropic | Claude Opus, Sonnet, and Haiku variants | `ANTHROPIC_API_KEY` |
+
+Keys entered through the application are stored in:
+
+```text
+~/Library/Application Support/Whispr/.env
+```
 
 ## Installation
 
-### 1. Clone the repo
+### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/georgelele1/Comp9900-w18c-almond.git
-cd whispr
+git clone https://github.com/georgelele1/Whispr.git
+cd Whispr
 ```
 
-### 2. Install Python dependencies
+### 2. Prepare the Python Runtime
 
-Run the setup script from the repo root:
+On macOS:
 
 ```bash
 bash mac-app/envscripts/scripts.sh
 ```
 
-This script will:
-- Create a Python virtual environment at `mac-app/runtime/venv/`
-- Install all packages from `backend/requirements.txt`
-- Run a quick smoke test (`get-language`) to confirm the backend is working
+To select a different Python executable:
 
-If you see `Runtime setup complete.` at the end, you're good to go.
-
-> **Note:** The script requires `python3.11`. If you have a different Python version, run it as:
-> ```bash
-> PYTHON_BIN=python3.12 bash mac-app/envscripts/scripts.sh
-> ```
-
-### 3. Open and build the Xcode project
-
-```
-mac-app/Whispr.xcodeproj
+```bash
+PYTHON_BIN=python3.12 bash mac-app/envscripts/scripts.sh
 ```
 
-Build and run with **⌘R** in Xcode, or archive for distribution.
+The script creates:
 
-### 4. Grant permissions on first launch
+```text
+mac-app/runtime/venv
+```
 
-macOS will prompt for two permissions — both are required.
+On Windows, for backend development and tests only:
 
-> **Important:** Assign a development team in the Xcode project's **Signing & Capabilities** tab before building. Without a team, macOS treats each build as a new, unrecognised app and your granted permissions will not be saved between runs.
+```powershell
+powershell -ExecutionPolicy Bypass -File mac-app\envscripts\win_scripts.ps1
+```
 
-| Permission | Why |
+The SwiftUI application and EventKit integration require macOS.
+
+### 3. Configure a Model Credential
+
+You can use the application's API Keys screen or configure the backend environment manually.
+
+For the default OpenAI model:
+
+```env
+OPENAI_API_KEY=your-key
+```
+
+For ConnectOnion models:
+
+```bash
+cd mac-app/backend
+co init
+```
+
+Never commit `.env` files or API keys.
+
+### 4. Build the macOS Application
+
+Open:
+
+```text
+mac-app/Whispr/Whispr.xcodeproj
+```
+
+Assign a development team under **Signing & Capabilities**, then build and run the application from Xcode.
+
+### 5. Grant Permissions
+
+| Permission | Purpose |
 |---|---|
-| **Microphone** | Recording your voice |
-| **Accessibility** | Global hotkeys + auto-paste |
-
----
+| Microphone | Record speech |
+| Accessibility | Global shortcuts and automatic paste |
+| Calendars | Read events for Calendar Agent requests |
 
 ## Usage
 
-### Starting and stopping a recording
+Default shortcuts:
 
-| Action | Hotkey |
+| Action | Shortcut |
 |---|---|
-| Start recording | `⌥ Space` |
-| Stop recording | `⌥ S` |
+| Start recording | `Option + Space` |
+| Stop and process | `Option + S` |
 
-After stopping, Whispr transcribes your audio, processes it, and pastes the result into the app that was active when you pressed start.
+The shortcuts can be changed from the Shortcuts screen.
 
-### How Whispr formats your output
+Example dictation:
 
-Whispr is a transcription cleaner — it takes raw voice input and produces polished text. It automatically:
-
-- Removes filler words (uh, um, like, so, basically)
-- Fixes punctuation and capitalisation
-- Formats lists when you say "first… second… third…" or use connectors like "also", "and then"
-- Adapts format to the active app (email, chat, terminal, notes)
-- Supports any output language regardless of what language you speak in
-
-**Dictation examples:**
-
-> *"uh so basically I wanted to say that the deadline has been moved to Friday"*
-> → `The deadline has been moved to Friday.`
-
-> *"point one make sure the tests pass point two update the readme point three tag the release"*
-> → `1. Make sure the tests pass.`
-> → `2. Update the README.`
-> → `3. Tag the release.`
-
-> *"install connectonion in my terminal"* (in Terminal)
-> → `pip install connectonion`
-
----
-
-## Features
-
-### Personal Dictionary
-Teach Whispr how to spell your names, course codes, package names, and jargon so they're never misheard again.
-
-- Open **Whispr → Dictionary**
-- Add a **correct phrase** (e.g. `connectonion`) and **aliases** (e.g. `connector onion, connect onion`)
-- Corrections are applied before every transcription — no LLM call needed
-- The dictionary also **auto-learns** from your transcription history every 5 recordings, using sentence structure analysis to extract person names, package names, and technical terms automatically
-
-### Voice Snippets
-Map a trigger phrase to any text or URL expansion.
-
-- Open **Whispr → Snippets**
-- Add a **trigger** (e.g. `zoom link`) and **expansion** (e.g. `https://zoom.us/j/123456`)
-- Say the trigger during dictation — it expands in the output automatically
-- Works across languages: saying the trigger in Chinese will still expand the English snippet correctly
-
-### Output Language
-Whispr can transcribe and output in any supported language regardless of what language you speak.
-
-Change it from:
-- **Menu bar icon → Output Language** submenu
-- **Sidebar → Output Language** picker
-
-Supported: English, Chinese, Spanish, French, Japanese, Korean, Arabic, German, Portuguese.
-
-### AI Model Selection
-Choose which AI model powers Whispr from the **API Keys** tab.
-
-| Provider | Models | Key required |
-|---|---|---|
-| Google (via connectonion) | Gemini 3 Flash, Gemini 3 Pro, Gemini 2.5 Flash | No — included free |
-| OpenAI | GPT-5.5, GPT-5, GPT-4o | Yes — paste your `sk-` key |
-| Anthropic | Claude Opus 4.6, Claude Sonnet 4.6, Claude Haiku 4.5 | Yes — paste your `sk-ant-` key |
-
-Provider is detected automatically from the key prefix when you paste it.
-
-### AI Profile Learning
-After every 50 transcriptions, Whispr quietly analyses your usage patterns and updates a personal profile — your career area, writing style, frequent apps, and recurring topics. This makes every subsequent transcription more accurate for your context. No data leaves your machine.
-
-### Context Awareness (Session Memory)
-Whispr remembers recent interactions within a 60-minute window and understands follow-up instructions like:
-
-- "make it shorter"
-- "make it more polite"
-- "add one more point to it"
-- "translate it"
-
-The system automatically decides whether to use previous context or treat the input independently — no trigger words required.
-
----
-
-### Agent Routing
-
-Whispr uses a structured agent loop before text refinement:
-
-- Calendar requests are routed to a read-only macOS Calendar agent.
-- Professional document and literature requests are routed to a local Knowledge agent.
-- Other requests continue through the app-aware Refiner agent.
-
-The Knowledge agent searches TXT, Markdown, JSON, CSV, and text-based PDF files from:
-
-- `~/Library/Application Support/Whispr/knowledge`
-- `mac-app/backend/knowledge` for files bundled with the app
-
-## Menu Bar
-
-Click the menu bar icon for quick access:
-
-| Item | Description |
-|---|---|
-| Last result | Preview of the most recent transcription (click to copy) |
-| Model | Active model + cost + balance |
-| Start / Stop Recording | Same as hotkeys |
-| Output Language | Submenu to switch output language |
-| Update Dictionary | Manually trigger a dictionary refresh from recent transcriptions |
-| Settings | Opens the main window |
-| Quit Whispr | Exits the app |
-
----
-
-## Main Window
-
-### Home
-Overview of your stats (dictionary terms, snippets, today's recordings) and a feed of recent transcriptions grouped by date. Each entry has a copy button.
-
-### History
-Full transcription history — searchable by output text or app name. Click any entry to see the raw transcription vs the cleaned output side by side. History can be cleared from here.
-
-### Dictionary
-View, add, edit, and delete your personal dictionary terms and their aliases.
-
-### Snippets
-View, add, edit, and delete your voice snippet shortcuts.
-
-### Shortcuts
-Customise the start and stop recording hotkeys. Click a shortcut pill to record a new key combination. Requires at least one modifier key (⌘ ⌃ ⌥ ⇧).
-
-### API Keys
-Select your AI model and manage API keys per provider. Keys are stored locally in `~/Library/Application Support/Whispr/.env` — never sent anywhere else.
-
----
-
-## Running the Test Suite
-
-The test suite exercises the full backend pipeline — transcription cleaning, app-aware formatting, session memory, snippet expansion, and edge cases — without requiring audio input or a running macOS app.
-
-### Prerequisites
-
-Make sure the Python virtual environment is set up by running `scripts.sh` (see [Installation](#installation) step 2). The venv is linked automatically — no activation needed.
-
-### Run all tests
-
-From the repo root:
-
-```bash
-python mac-app/backend/testall.py
+```text
+Input:  "uh so basically the deadline has moved to Friday"
+Output: "The deadline has moved to Friday."
 ```
 
-Or from inside the backend directory:
+Example follow-up:
+
+```text
+First request: "Write an email explaining that I will submit tomorrow."
+Follow-up:     "Make it more polite."
+```
+
+Example calendar request:
+
+```text
+What meetings do I have tomorrow?
+```
+
+Example knowledge request:
+
+```text
+According to the local research papers, how does RAG use non-parametric memory?
+```
+
+## Application Screens
+
+- **Home**: usage summary and recent transcription history
+- **History**: searchable raw and processed transcription records
+- **Dictionary**: personal terms, aliases, editing, and removal
+- **Snippets**: voice trigger and expansion management
+- **Shortcuts**: configurable start and stop shortcuts
+- **API Keys**: model selection and provider credential management
+- **Output Language**: target language selection
+
+## Testing
+
+### Local Unit Tests
+
+These tests cover Agent routing, RAG retrieval and caching, profile learning thresholds, local evaluation, and snippet failure handling. They do not require a live model request.
+
+```bash
+cd mac-app/backend
+python -m unittest -v test_agent_loop.py
+```
+
+Current suite: 12 tests.
+
+### LLM Integration Tests
+
+The integration suite exercises live refinement, app-aware formatting, and session behavior:
 
 ```bash
 cd mac-app/backend
 python testall.py
 ```
 
-### What the suite covers
+This suite requires network access and a valid credential for the selected model. Remote API latency or outages can cause transient failures.
 
-| Suite | Cases | What it checks |
-|---|---|---|
-| **Single-turn tests** | 9 | Filler removal, list formatting, chat/email/terminal formatting, meaning preservation, grammar |
-| **Edge case tests** | 6 | Empty input, whitespace, CJK unicode, long input, filler-only input, numbers/IPs |
-| **Snippet tests** | 4 | Exact trigger expansion, case-insensitive match, no false expansion, multiple snippets |
-| **Session tests** | 4 | Shorten output, politeness change, add a step, language continuity across turns |
-
-### Example output
-
-```
-================================================================================
-SINGLE TURN TESTS
-================================================================================
-
-CASE : filler removal — quick_clean layer
-APP  : Notes
-IN   : 'uh so basically i think we should start the meeting now'
-OUT  : 'I think we should start the meeting now.'
-  ✅ PASS — filler removal — quick_clean layer
-
-CASE : terminal command — all packages, no markdown
-APP  : Terminal
-IN   : 'install numpy pandas matplotlib'
-OUT  : 'pip install numpy pandas matplotlib'
-  ✅ PASS — terminal command — all packages, no markdown
-
-...
-
-================================================================================
-FINAL RESULT
-================================================================================
-  Passed : 23
-  Failed : 0
-  Total  : 23
-```
-
-### Environment flags
-
-Two optional flags enable extra debug output during a test run:
-
-| Flag | Effect |
-|---|---|
-| `WHISPR_DEBUG_EVAL=1` | Enables the eval/retry loop — each output is scored and retried up to 2 times if it fails |
-| `WHISPR_DEBUG_LOGS=1` | Prints agent timing and tool call counts to stderr after each transcription |
+### Syntax Check
 
 ```bash
-WHISPR_DEBUG_EVAL=1 python mac-app/backend/testall.py
+cd mac-app/backend
+python -m compileall app.py agents storage.py snippets.py
 ```
 
----
+### Useful Backend Commands
 
-## Changing Hotkeys
+```bash
+# Inspect routing without running the selected agent
+python app.py cli route "Check my calendar tomorrow" "Calendar"
 
-Use the **Shortcuts** tab in the main window to record new key combinations without editing code. Changes take effect immediately.
+# Search the local knowledge base
+python app.py cli knowledge-search "transformer attention"
 
-Defaults: `⌥ Space` to start, `⌥ S` to stop.
+# Refine text without recording audio
+python app.py cli refine "uh please make this more formal" "Notes" "English"
 
----
+# Inspect recent history
+python app.py cli get-history
+```
 
 ## Project Structure
 
-```
-whispr/
-├── mac-app/
-│   ├── Whispr.xcodeproj
-│   ├── envscripts/
-│   │   └── scripts.sh                    # One-command venv + dependency setup
-│   ├── runtime/
-│   │   └── venv/                         # Auto-created by scripts.sh
-│   └── Sources/
-│       ├── AppManager.swift              # Core orchestrator + auto dictionary trigger
-│       ├── AudioRecorder.swift           # AVFoundation recording
-│       ├── LocalBackendClient.swift      # Swift ↔ Python bridge
-│       ├── HotkeyManager.swift           # Global hotkeys via CGEvent
-│       ├── MenuBarController.swift       # Menu bar icon + menu
-│       ├── Mainwindowcontroller.swift    # Main window + sidebar navigation
-│       ├── FloatingIndicator.swift       # HUD panel (recording / processing state)
-│       ├── Config.swift                  # Provider + model registry
-│       ├── Models.swift                  # AppStatus enum
-│       ├── LanguageManager.swift         # Output language state
-│       ├── HomeView.swift
-│       ├── HistoryView.swift
-│       ├── DictionaryView.swift
-│       ├── SnippetsView.swift
-│       ├── ShortcutsView.swift
-│       ├── APIKeysView.swift
-│       ├── OnboardingView.swift
-│       ├── OnboardingTour.swift
-│       ├── WhisprTheme.swift
-│       └── BackendResponse.swift
-└── backend/
-    ├── app.py                            # Main pipeline orchestrator
-    ├── storage.py                        # JSON storage + multi-provider API key management
-    ├── snippets.py                       # Snippet CRUD
-    ├── testall.py                        # Full backend test suite
-    └── agents/
-        ├── refiner.py                    # Transcription cleaning subagent
-        ├── profile.py                    # User profile + background learning
-        ├── dictionary_agent.py           # Dictionary management + auto-learning
-        └── plugins/
-            ├── session.py                # Rolling session memory (60 min TTL)
-            ├── lang.py                   # Language injection
-            ├── snippets.py               # Snippet placeholder injection + restoration
-            ├── visibility.py             # Agent timing logs (debug only)
-            └── eval.py                   # Output eval + retry loop (debug only)
+```text
+Whispr/
+|-- mac-app/
+|   |-- Whispr/
+|   |   |-- Whispr.xcodeproj/
+|   |   `-- Whispr/
+|   |       |-- AppManager.swift
+|   |       |-- AudioRecorder.swift
+|   |       |-- LocalBackendClient.swift
+|   |       |-- HotkeyManager.swift
+|   |       |-- MenuBarController.swift
+|   |       |-- FloatingIndicator.swift
+|   |       |-- Config.swift
+|   |       `-- ...
+|   |-- backend/
+|   |   |-- app.py
+|   |   |-- storage.py
+|   |   |-- snippets.py
+|   |   |-- testall.py
+|   |   |-- test_agent_loop.py
+|   |   |-- knowledge/
+|   |   `-- agents/
+|   |       |-- agent_loop.py
+|   |       |-- refiner.py
+|   |       |-- calendar_agent.py
+|   |       |-- knowledge_agent.py
+|   |       |-- dictionary_agent.py
+|   |       |-- profile.py
+|   |       `-- plugins/
+|   |           |-- session.py
+|   |           |-- snippets.py
+|   |           |-- eval.py
+|   |           |-- appname.py
+|   |           `-- lang.py
+|   `-- envscripts/
+|       |-- scripts.sh
+|       `-- win_scripts.ps1
+|-- README.md
+`-- RESUME_PROJECT.md
 ```
 
----
+## Data and Privacy
 
-## Data & Privacy
+- Audio files are recorded locally before transcription.
+- History, profile, dictionary, snippets, session memory, and knowledge documents are stored locally.
+- Calendar access is read-only.
+- Knowledge retrieval and document parsing run locally.
+- Requests sent to the selected LLM or transcription provider leave the device and are subject to that provider's privacy policy.
+- API keys are stored locally and excluded from Git by `.gitignore`.
 
-- All processing happens **on-device**. No audio or transcriptions are sent to external servers.
-- AI models run via connectonion (Google) or your own API key (OpenAI / Anthropic).
-- All user data is stored in `~/Library/Application Support/Whispr/`.
-- API keys are stored in `~/Library/Application Support/Whispr/.env` — local only.
+Default application data location:
 
----
+```text
+~/Library/Application Support/Whispr/
+```
+
+## Current Limitations
+
+- The application UI requires macOS.
+- Calendar integration cannot be tested on Windows.
+- Local RAG currently uses lexical retrieval rather than embeddings or a vector database.
+- Image-only PDFs require OCR.
+- Knowledge ingestion does not yet have a dedicated frontend file manager.
+- Live integration tests depend on external model availability and network connectivity.
+
+## License
+
+No license file is currently included. Add a license before distributing or accepting external contributions.
