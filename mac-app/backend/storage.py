@@ -73,8 +73,8 @@ PROVIDER_OPTIONS: List[Dict[str, Any]] = [
         "key_prefixes": ["sk-"],
         "models": [
             {
-                "id": "gpt-5.4",
-                "label": "GPT-5.4 Fast",
+                "id": "gpt-5.5",
+                "label": "GPT-5.5",
             },
             {
                 "id": "gpt-5",
@@ -122,7 +122,7 @@ for provider in PROVIDER_OPTIONS:
 
 SUPPORTED_MODELS: List[str] = [m["id"] for m in MODEL_OPTIONS]
 
-DEFAULT_MODEL = "co/gemini-3-flash-preview"
+DEFAULT_MODEL = "gpt-5.5"
 
 
 def get_provider_config(provider_id: str) -> Dict[str, Any] | None:
@@ -419,6 +419,8 @@ def _default_profile() -> Dict[str, Any]:
             "habits": [],
             "frequent_apps": [],
             "last_updated": 0,
+            "last_history_ts": 0,
+            "learning_started_at": 0,
         },
     }
 

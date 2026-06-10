@@ -4,6 +4,8 @@
 <dict>
 	<key>NSCalendarsUsageDescription</key>
 	<string>Whispr reads your calendar to answer questions about your schedule.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Whispr needs read access to your calendar to answer schedule questions.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Whispr needs microphone access to record your voice for transcription.</string>
 	<key>NSAppTransportSecurity</key>

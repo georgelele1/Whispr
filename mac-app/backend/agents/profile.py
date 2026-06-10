@@ -6,7 +6,11 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import sys
 import threading
+import time
+from pathlib import Path
 
 from connectonion import Agent
 
@@ -23,7 +27,6 @@ _CONTEXT_CACHE: str = ""
 _CONTEXT_READY: bool = False
 _CACHE_LOCK = threading.Lock()
 
-_LEARN_COUNTER = 0
 _LEARN_EVERY = 50
 _LEARN_RUNNING = False
 _LEARN_LOCK = threading.Lock()
@@ -130,21 +133,58 @@ def inject_profile(agent) -> None:
         })
 
 
-def update_profile_background(agent) -> None:
-    global _LEARN_COUNTER, _LEARN_RUNNING
+def should_learn_profile() -> bool:
+    items = load_history().get("items", [])
+    history_count = len(items)
+    learned = load_profile().get("learned", {})
+    last_history_ts = int(learned.get("last_history_ts", 0) or 0)
+    learning_started_at = float(learned.get("learning_started_at", 0) or 0)
+    if learning_started_at and time.time() - learning_started_at < 600:
+        return False
 
-    _LEARN_COUNTER += 1
+    if last_history_ts:
+        new_count = sum(int(item.get("ts", 0) or 0) > last_history_ts for item in items)
+    else:
+        last_updated = int(learned.get("last_updated", 0) or 0)
+        new_count = max(0, history_count - last_updated)
 
-    if _LEARN_COUNTER % _LEARN_EVERY != 0:
-        return
+    return history_count >= 5 and new_count >= _LEARN_EVERY
 
-    with _LEARN_LOCK:
-        if _LEARN_RUNNING:
-            return
 
-        _LEARN_RUNNING = True
+def schedule_profile_learning() -> bool:
+    """Start a detached learner so the transcription response is not delayed."""
+    if not should_learn_profile():
+        return False
 
-    threading.Thread(target=_learn, daemon=True).start()
+    profile = load_profile()
+    profile.setdefault("learned", {})["learning_started_at"] = time.time()
+    save_profile(profile)
+
+    app_path = Path(__file__).resolve().parent.parent / "app.py"
+    kwargs = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "start_new_session": True,
+    }
+    if sys.platform == "win32":
+        kwargs["creationflags"] = (
+            subprocess.CREATE_NEW_PROCESS_GROUP
+            | subprocess.DETACHED_PROCESS
+            | subprocess.CREATE_NO_WINDOW
+        )
+
+    try:
+        subprocess.Popen(
+            [sys.executable, str(app_path), "cli", "learn-profile"],
+            **kwargs,
+        )
+        return True
+    except Exception:
+        profile = load_profile()
+        profile.setdefault("learned", {})["learning_started_at"] = 0
+        save_profile(profile)
+        return False
 
 
 def _text_len(text: str) -> int:
@@ -156,8 +196,13 @@ def _text_len(text: str) -> int:
     return len(text.split())
 
 
-def _learn() -> None:
+def learn_profile_now() -> bool:
     global _LEARN_RUNNING
+
+    with _LEARN_LOCK:
+        if _LEARN_RUNNING:
+            return False
+        _LEARN_RUNNING = True
 
     try:
         items = load_history().get("items", [])[-50:]
@@ -168,10 +213,12 @@ def _learn() -> None:
             text = str(item.get("raw_text", "") or item.get("final_text", "")).strip()
 
             if text and _text_len(text) >= 4:
-                texts.append(text)
+                app_name = str(item.get("app_name", "")).strip()
+                prefix = f"[{app_name}] " if app_name else ""
+                texts.append(prefix + text)
 
         if len(texts) < 5:
-            return
+            return False
 
         sample = "\n".join(f"- {text[:120]}" for text in texts[-30:])
 
@@ -219,9 +266,16 @@ def _learn() -> None:
             profile["learned"]["habits"] = habits
             profile["learned"]["frequent_apps"] = freq_apps
             profile["learned"]["last_updated"] = len(load_history().get("items", []))
+            profile["learned"]["last_history_ts"] = max(
+                (int(item.get("ts", 0) or 0) for item in items),
+                default=0,
+            )
+            profile["learned"]["learning_started_at"] = 0
 
             save_profile(profile)
             invalidate_context_cache()
+            return True
+        return False
 
     finally:
         with _LEARN_LOCK:

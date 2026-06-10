@@ -93,10 +93,13 @@ def _semantic_match_snippets(
         ),
     )
 
-    raw = str(matcher.input(
-        f"User said:\n{raw_input or user_text}\n\n"
-        f"Snippet triggers:\n{catalogue}"
-    )).strip()
+    try:
+        raw = str(matcher.input(
+            f"User said:\n{raw_input or user_text}\n\n"
+            f"Snippet triggers:\n{catalogue}"
+        )).strip()
+    except Exception:
+        return []
 
     try:
         matched = json.loads(raw)
@@ -145,7 +148,7 @@ def inject_snippets(agent) -> None:
     if not matched_indices:
         return
 
-    system_hints: list[str] = {}
+    system_hints: list[str] = []
 
     placeholders = {}
 

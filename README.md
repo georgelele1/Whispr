@@ -146,7 +146,7 @@ Choose which AI model powers Whispr from the **API Keys** tab.
 | Provider | Models | Key required |
 |---|---|---|
 | Google (via connectonion) | Gemini 3 Flash, Gemini 3 Pro, Gemini 2.5 Flash | No — included free |
-| OpenAI | GPT-5.4, GPT-5, GPT-4o | Yes — paste your `sk-` key |
+| OpenAI | GPT-5.5, GPT-5, GPT-4o | Yes — paste your `sk-` key |
 | Anthropic | Claude Opus 4.6, Claude Sonnet 4.6, Claude Haiku 4.5 | Yes — paste your `sk-ant-` key |
 
 Provider is detected automatically from the key prefix when you paste it.
@@ -165,6 +165,19 @@ Whispr remembers recent interactions within a 60-minute window and understands f
 The system automatically decides whether to use previous context or treat the input independently — no trigger words required.
 
 ---
+
+### Agent Routing
+
+Whispr uses a structured agent loop before text refinement:
+
+- Calendar requests are routed to a read-only macOS Calendar agent.
+- Professional document and literature requests are routed to a local Knowledge agent.
+- Other requests continue through the app-aware Refiner agent.
+
+The Knowledge agent searches TXT, Markdown, JSON, CSV, and text-based PDF files from:
+
+- `~/Library/Application Support/Whispr/knowledge`
+- `mac-app/backend/knowledge` for files bundled with the app
 
 ## Menu Bar
 

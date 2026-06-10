@@ -55,7 +55,7 @@ enum Config {
             free:        false,
             keyPrefixes: ["sk-"],
             models: [
-                ModelOption(id: "gpt-5.4", label: "GPT-5.4 (Fast)",     provider: "OpenAI"),
+                ModelOption(id: "gpt-5.5", label: "GPT-5.5",            provider: "OpenAI"),
                 ModelOption(id: "gpt-5",   label: "GPT-5 (Powerful)",   provider: "OpenAI"),
                 ModelOption(id: "gpt-4o",  label: "GPT-4o (Efficient)", provider: "OpenAI"),
             ]
@@ -78,7 +78,7 @@ enum Config {
         providers.flatMap { $0.models }
     }
 
-    static let defaultModel = "co/gemini-3-flash-preview"
+    static let defaultModel = "gpt-5.5"
 
     // ── Provider lookup helpers ───────────────────────────
 

@@ -51,10 +51,12 @@ from agents.profile import (
     invalidate_context_cache,
     is_first_launch,
     complete_onboarding,
+    learn_profile_now,
+    schedule_profile_learning,
 )
 
 from agents.plugins.session import session_remember, clear_session
-from agents.refiner import run as run_refiner
+from agents.agent_loop import run as run_agent_loop
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -144,7 +146,8 @@ def transcribe_and_enhance_impl(
 
     effective_app = str(app_name or "unknown").strip() or "unknown"
 
-    final_text = run_refiner(raw_text, effective_app)
+    loop_result = run_agent_loop(raw_text, effective_app)
+    final_text = str(loop_result.get("output", "")).strip()
 
     session_remember(raw_text, final_text)
 
@@ -155,13 +158,19 @@ def transcribe_and_enhance_impl(
         "final_text": final_text,
         "app_name": effective_app,
         "target_language": target_language or get_target_language(),
+        "route": loop_result.get("route", {}),
+        "evaluation": loop_result.get("evaluation", {}),
     })
+
+    schedule_profile_learning()
 
     return {
         "ok": True,
         "raw_text": raw_text,
         "final_text": final_text,
         "app_name": effective_app,
+        "route": loop_result.get("route", {}),
+        "evaluation": loop_result.get("evaluation", {}),
         "ts": now_ms(),
     }
 
@@ -267,6 +276,8 @@ if __name__ == "__main__":
         _exit_json({
             "ok": result.get("ok", False),
             "output": result.get("final_text", ""),
+            "route": result.get("route", {}),
+            "evaluation": result.get("evaluation", {}),
             "error": result.get("error", ""),
         }, 0 if result.get("ok") else 1)
 
@@ -289,8 +300,36 @@ if __name__ == "__main__":
             "ok": result.get("ok", False),
             "input": raw_text,
             "output": result.get("final_text", ""),
+            "route": result.get("route", {}),
+            "evaluation": result.get("evaluation", {}),
             "error": result.get("error", ""),
         }, 0 if result.get("ok") else 1)
+
+    elif command == "route":
+        from agents.agent_loop import classify
+
+        raw_text = _arg(3)
+        app_name = _arg(4, "unknown")
+        decision = classify(raw_text, app_name)
+        _exit_json({"ok": True, "route": decision.__dict__})
+
+    elif command == "learn-profile":
+        _exit_json({"ok": learn_profile_now()})
+
+    elif command == "knowledge-search":
+        from agents.knowledge_agent import search_knowledge
+
+        query = _arg(3)
+        _exit_json(search_knowledge(query))
+
+    elif command == "calendar-query":
+        from agents.calendar_agent import query_calendar_events
+
+        start_iso = _arg(3)
+        end_iso = _arg(4)
+        search_text = _arg(5)
+        result = query_calendar_events(start_iso, end_iso, search_text)
+        _exit_json(result, 0 if result.get("ok") else 1)
 
     elif command == "set-language":
         language = _arg(3)
@@ -427,6 +466,8 @@ if __name__ == "__main__":
                 "habits": [],
                 "frequent_apps": [],
                 "last_updated": 0,
+                "last_history_ts": 0,
+                "learning_started_at": 0,
             },
         })
 
@@ -460,6 +501,8 @@ if __name__ == "__main__":
                 "habits": [],
                 "frequent_apps": [],
                 "last_updated": 0,
+                "last_history_ts": 0,
+                "learning_started_at": 0,
             },
         })
 
